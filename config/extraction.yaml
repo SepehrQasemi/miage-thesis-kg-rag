@@ -1,0 +1,31 @@
+paths:
+  raw_pdf_dir: data/raw/theses_pdf
+  sqlite_db: data/app.sqlite
+  processed_dir: data/processed
+  reports_dir: data/reports
+  manifest_path: data/manifest/final_unique_theses_manifest.csv
+
+fields:
+  - thesis_id
+  - file_name
+  - year
+  - title
+  - master_level
+  - track
+  - abstract
+  - keywords
+  - concepts
+  - use_case
+  - methodology
+  - confidence
+  - needs_review
+
+extraction:
+  max_pages_for_cover_metadata: 3
+  use_rule_based: true
+  use_nlp_keywords: true
+  use_llm_fallback: false
+  local_llm_model: qwen2.5:7b
+  store_full_text: false
+  store_page_rows: false
+  one_row_per_thesis: true

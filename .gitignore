@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
+
+# Local runtime artifacts. The setup script recreates these folders and
+# initializes an empty database/graph for fresh clones.
+output/
+data/*
+!data/README.md

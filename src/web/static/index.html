@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MIAGE Thesis Knowledge Graph</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">KG</div>
+          <div>
+            <h1>MIAGE Graph</h1>
+            <p>Thesis intelligence</p>
+          </div>
+        </div>
+
+        <nav class="nav-list" aria-label="Primary">
+          <button class="nav-item active" data-view="dashboard" type="button">
+            <span class="nav-icon" aria-hidden="true">⌁</span>
+            Dashboard
+          </button>
+          <button class="nav-item" data-view="search" type="button">
+            <span class="nav-icon" aria-hidden="true">⌕</span>
+            Thesis Search
+          </button>
+          <button class="nav-item" data-view="concepts" type="button">
+            <span class="nav-icon" aria-hidden="true">◎</span>
+            Concepts
+          </button>
+          <button class="nav-item" data-view="import" type="button">
+            <span class="nav-icon" aria-hidden="true">+</span>
+            Import PDF
+          </button>
+        </nav>
+
+        <div class="sidebar-status">
+          <span class="status-dot"></span>
+          <span>Local SQLite graph</span>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h2 id="view-title">Dashboard</h2>
+            <p id="view-subtitle">Overview of the extracted thesis graph.</p>
+          </div>
+          <div class="topbar-actions">
+            <button class="icon-button" id="refresh-button" type="button" title="Refresh data" aria-label="Refresh data">
+              ↻
+            </button>
+          </div>
+        </header>
+
+        <section id="dashboard-view" class="view active">
+          <div class="metric-grid" id="metric-grid"></div>
+
+          <div class="dashboard-grid">
+            <section class="panel">
+              <div class="panel-header">
+                <h3>Top Concepts</h3>
+              </div>
+              <div id="top-concepts" class="rank-list"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <h3>Use Cases</h3>
+              </div>
+              <div id="top-use-cases" class="rank-list"></div>
+            </section>
+
+            <section class="panel wide">
+              <div class="panel-header">
+                <h3>Methodologies</h3>
+              </div>
+              <div id="top-methodologies" class="rank-list compact"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="search-view" class="view">
+          <div class="toolbar">
+            <div class="search-box">
+              <label for="text-query">Search</label>
+              <input id="text-query" type="search" placeholder="Title, concept, keyword..." />
+            </div>
+            <div class="select-wrap">
+              <label for="concept-filter">Concept</label>
+              <select id="concept-filter"></select>
+            </div>
+            <div class="select-wrap">
+              <label for="year-filter">Year</label>
+              <select id="year-filter"></select>
+            </div>
+            <div class="select-wrap">
+              <label for="level-filter">Level</label>
+              <select id="level-filter"></select>
+            </div>
+            <div class="select-wrap">
+              <label for="track-filter">Track</label>
+              <select id="track-filter"></select>
+            </div>
+            <button class="primary-button" id="search-button" type="button">Search</button>
+            <button class="secondary-button" id="clear-button" type="button">Clear</button>
+          </div>
+
+          <div class="content-split">
+            <section class="panel table-panel">
+              <div class="panel-header">
+                <h3>Theses</h3>
+                <span id="result-count" class="muted"></span>
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Title</th>
+                      <th>Year</th>
+                      <th>Level</th>
+                      <th>Track</th>
+                      <th>Use case</th>
+                    </tr>
+                  </thead>
+                  <tbody id="thesis-table"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <aside class="detail-panel" id="detail-panel">
+              <div class="empty-state">Select a thesis to inspect its graph profile.</div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="concepts-view" class="view">
+          <div class="content-split concepts-split">
+            <section class="panel">
+              <div class="panel-header">
+                <h3>Concept Index</h3>
+              </div>
+              <div id="concept-list" class="concept-list"></div>
+            </section>
+
+            <aside class="detail-panel" id="concept-detail">
+              <div class="empty-state">Select a concept to see connected theses and related concepts.</div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="import-view" class="view">
+          <div class="import-grid">
+            <section class="panel">
+              <div class="panel-header">
+                <h3>PDF Import</h3>
+              </div>
+              <form id="upload-form" class="upload-form">
+                <label class="file-drop" for="pdf-file">
+                  <span id="file-label">Choose one or more PDF theses</span>
+                  <input id="pdf-file" name="files" type="file" accept="application/pdf,.pdf" multiple />
+                </label>
+                <button class="primary-button" id="process-upload-button" type="submit">Process PDF(s)</button>
+              </form>
+              <div id="import-status" class="status-banner muted-banner">No draft selected.</div>
+              <div id="batch-list" class="batch-list hidden"></div>
+            </section>
+
+            <section class="panel import-review-panel">
+              <div class="panel-header">
+                <h3>Review</h3>
+                <span id="draft-meta" class="muted"></span>
+              </div>
+              <form id="review-form" class="review-form hidden">
+                <div class="form-grid">
+                  <label>
+                    Thesis ID
+                    <input id="review-thesis-id" name="thesis_id" type="text" />
+                  </label>
+                  <label>
+                    Year
+                    <input id="review-year" name="year" type="text" />
+                  </label>
+                  <label>
+                    Level
+                    <select id="review-master-level" name="master_level">
+                      <option value="M1">M1</option>
+                      <option value="M2">M2</option>
+                      <option value="N/A">N/A</option>
+                    </select>
+                  </label>
+                  <label>
+                    Track
+                    <select id="review-track" name="track">
+                      <option value="apprentissage">apprentissage</option>
+                      <option value="mixte">mixte</option>
+                      <option value="N/A">N/A</option>
+                    </select>
+                  </label>
+                  <label class="span-2">
+                    Title
+                    <textarea id="review-title" name="title" rows="2"></textarea>
+                  </label>
+                  <label class="span-2">
+                    Keywords
+                    <input id="review-keywords" name="keywords" type="text" />
+                  </label>
+                  <label class="span-2">
+                    Concepts
+                    <input id="review-concepts" name="concepts" type="text" />
+                  </label>
+                  <label class="span-2">
+                    Use case
+                    <input id="review-use-case" name="use_case" type="text" />
+                  </label>
+                  <label class="span-2">
+                    Methodology
+                    <input id="review-methodology" name="methodology" type="text" />
+                  </label>
+                  <label class="span-2">
+                    Abstract
+                    <textarea id="review-abstract" name="abstract" rows="4"></textarea>
+                  </label>
+                </div>
+                <section class="llm-panel hidden" id="llm-suggestion-panel">
+                  <div class="panel-header compact-header">
+                    <h3>LLM suggestions</h3>
+                    <span id="llm-confidence" class="muted"></span>
+                  </div>
+                  <div id="llm-suggestion-content" class="suggestion-list"></div>
+                  <p id="llm-notes" class="muted"></p>
+                </section>
+                <div class="review-actions">
+                  <button class="secondary-button" id="generate-llm-button" type="button">Generate LLM suggestions</button>
+                  <button class="secondary-button hidden" id="apply-llm-button" type="button">Apply LLM suggestions</button>
+                  <button class="primary-button" id="approve-import-button" type="button">Approve</button>
+                  <button class="secondary-button" id="discard-import-button" type="button">Discard</button>
+                </div>
+              </form>
+              <div id="review-empty" class="empty-state">Process a PDF to review extracted metadata.</div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>

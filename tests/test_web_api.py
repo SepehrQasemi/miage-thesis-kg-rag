@@ -1,0 +1,290 @@
+import io
+
+from fastapi.testclient import TestClient
+from pypdf import PdfWriter
+
+from common.db import connect, init_schema
+from graph.knowledge_graph import build_knowledge_graph
+from graph.query import GraphQueryService
+from ingestion import import_workflow
+from llm.import_review import LLMUnavailableError
+from web import app as web_app
+
+
+def document(thesis_id: str, title: str, concepts: str) -> dict:
+    return {
+        "thesis_id": thesis_id,
+        "file_name": f"{thesis_id}.pdf",
+        "file_path": f"/tmp/{thesis_id}.pdf",
+        "sha256": f"sha-{thesis_id}",
+        "pages_count": 10,
+        "year": "2025",
+        "title": title,
+        "master_level": "M1",
+        "track": "apprentissage",
+        "abstract": "",
+        "keywords": "machine learning; detection; sante",
+        "concepts": concepts,
+        "use_case": "sante / aide au diagnostic",
+        "methodology": "comparaison experimentale",
+        "extraction_confidence": 1.0,
+    }
+
+
+def seed_database(db_file):
+    rows = [
+        document("thesis_0001", "Cancer detection", "machine learning; detection; sante"),
+        document("thesis_0002", "Medical AI", "IA; detection; sante"),
+    ]
+    graph = build_knowledge_graph(rows, related_min_shared_concepts=2)
+    with connect(db_file) as conn:
+        init_schema(conn)
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO documents (
+                    thesis_id, file_name, file_path, sha256, pages_count, year, title,
+                    master_level, track, abstract, keywords, concepts, use_case,
+                    methodology, extraction_confidence, status
+                )
+                VALUES (
+                    :thesis_id, :file_name, :file_path, :sha256, :pages_count, :year, :title,
+                    :master_level, :track, :abstract, :keywords, :concepts, :use_case,
+                    :methodology, :extraction_confidence, 'active'
+                )
+                """,
+                row,
+            )
+        conn.executemany(
+            """
+            INSERT INTO graph_nodes (node_id, node_type, label, slug, source, properties_json)
+            VALUES (:node_id, :node_type, :label, :slug, :source, :properties_json)
+            """,
+            [node.to_record() for node in graph.sorted_nodes()],
+        )
+        conn.executemany(
+            """
+            INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, weight, source, properties_json)
+            VALUES (:edge_id, :source_id, :target_id, :edge_type, :weight, :source, :properties_json)
+            """,
+            [edge.to_record() for edge in graph.sorted_edges()],
+        )
+        conn.commit()
+
+
+def client_for(tmp_path, monkeypatch):
+    db_file = tmp_path / "web.sqlite"
+    seed_database(db_file)
+    monkeypatch.setenv("MIAGE_APP_DB", str(db_file))
+    monkeypatch.setenv("MIAGE_RAW_PDF_DIR", str(tmp_path / "raw_pdf"))
+    monkeypatch.setenv("MIAGE_STAGING_DIR", str(tmp_path / "staging"))
+    monkeypatch.setenv("MIAGE_PROCESSED_DIR", str(tmp_path / "processed"))
+    monkeypatch.setenv("MIAGE_GRAPH_DIR", str(tmp_path / "graph"))
+    monkeypatch.setenv("MIAGE_REPORTS_DIR", str(tmp_path / "reports"))
+    monkeypatch.setattr(web_app, "service", lambda: GraphQueryService(db_file))
+    return TestClient(web_app.app)
+
+
+def sample_pdf_bytes(title: str = "Sample thesis") -> bytes:
+    writer = PdfWriter()
+    writer.add_blank_page(width=300, height=300)
+    writer.add_metadata({"/Title": title})
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+def stub_pdf_text(monkeypatch):
+    monkeypatch.setattr(
+        import_workflow,
+        "read_pdf_text",
+        lambda *_args, **_kwargs: {
+            "pages_count": 3,
+            "cover_text": "Memoire de M1 Master MIAGE apprentissage 2026 Cancer detection",
+            "full_text": "Resume Machine learning detection sante. Introduction benchmark classification prediction.",
+            "ocr_notes": [],
+        },
+    )
+
+
+def test_summary_endpoint_returns_graph_counts(tmp_path, monkeypatch):
+    client = client_for(tmp_path, monkeypatch)
+
+    response = client.get("/api/summary")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["node_counts"]["Thesis"] == 2
+    assert data["top_concepts"]
+
+
+def test_thesis_detail_endpoint_includes_similar_theses(tmp_path, monkeypatch):
+    client = client_for(tmp_path, monkeypatch)
+
+    response = client.get("/api/theses/thesis_0001")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "Cancer detection"
+    assert data["similar_theses"][0]["thesis_id"] == "thesis_0002"
+
+
+def test_filtered_thesis_search_uses_graph_filters(tmp_path, monkeypatch):
+    client = client_for(tmp_path, monkeypatch)
+
+    response = client.get("/api/theses", params={"concept": "machine learning", "track": "apprentissage"})
+
+    assert response.status_code == 200
+    assert [row["thesis_id"] for row in response.json()] == ["thesis_0001"]
+
+
+def test_import_upload_creates_review_draft(tmp_path, monkeypatch):
+    stub_pdf_text(monkeypatch)
+    client = client_for(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/api/imports",
+        files={"file": ("new_thesis.pdf", sample_pdf_bytes(), "application/pdf")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "draft"
+    assert data["draft"]["fields"]["thesis_id"] == "thesis_0003"
+    assert data["draft"]["fields"]["year"] == "2026"
+
+
+def test_batch_import_creates_unique_review_drafts(tmp_path, monkeypatch):
+    stub_pdf_text(monkeypatch)
+    client = client_for(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/api/imports/batch",
+        files=[
+            ("files", ("first_thesis.pdf", sample_pdf_bytes("First thesis"), "application/pdf")),
+            ("files", ("second_thesis.pdf", sample_pdf_bytes("Second thesis"), "application/pdf")),
+        ],
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "completed"
+    assert data["total"] == 2
+    assert data["drafts_count"] == 2
+    assert data["duplicates_count"] == 0
+    assert data["errors_count"] == 0
+    drafts = [item["draft"] for item in data["results"]]
+    assert [draft["fields"]["thesis_id"] for draft in drafts] == ["thesis_0003", "thesis_0004"]
+    assert {draft["draft_id"] for draft in drafts}
+
+
+def test_import_approval_updates_database_csv_and_graph(tmp_path, monkeypatch):
+    stub_pdf_text(monkeypatch)
+    client = client_for(tmp_path, monkeypatch)
+    upload = client.post(
+        "/api/imports",
+        files={"file": ("new_thesis.pdf", sample_pdf_bytes(), "application/pdf")},
+    )
+    draft = upload.json()["draft"]
+    fields = draft["fields"]
+    fields.update(
+        {
+            "title": "Cancer detection with machine learning",
+            "keywords": "machine learning; detection; sante",
+            "concepts": "machine learning; detection; sante",
+            "use_case": "sante / aide au diagnostic",
+            "methodology": "comparaison experimentale",
+        }
+    )
+
+    response = client.post(f"/api/imports/{draft['draft_id']}/approve", json=fields)
+
+    assert response.status_code == 200
+    assert response.json()["thesis_id"] == "thesis_0003"
+    assert (tmp_path / "raw_pdf" / "thesis_0003__new_thesis.pdf").exists()
+    assert (tmp_path / "processed" / "theses.csv").exists()
+    assert (tmp_path / "graph" / "nodes.csv").exists()
+    assert (tmp_path / "graph" / "edges.csv").exists()
+    with connect(tmp_path / "web.sqlite") as conn:
+        row = conn.execute("SELECT title FROM documents WHERE thesis_id = 'thesis_0003'").fetchone()
+        node_count = conn.execute("SELECT COUNT(*) AS count FROM graph_nodes WHERE node_type = 'Thesis'").fetchone()
+    assert row["title"] == "Cancer detection with machine learning"
+    assert node_count["count"] == 3
+
+    duplicate = client.post(
+        "/api/imports",
+        files={"file": ("new_thesis.pdf", sample_pdf_bytes(), "application/pdf")},
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["status"] == "duplicate"
+    assert duplicate.json()["duplicate"]["thesis_id"] == "thesis_0003"
+
+
+def test_import_llm_suggestions_do_not_update_database(tmp_path, monkeypatch):
+    stub_pdf_text(monkeypatch)
+    client = client_for(tmp_path, monkeypatch)
+    upload = client.post(
+        "/api/imports",
+        files={"file": ("new_thesis.pdf", sample_pdf_bytes(), "application/pdf")},
+    )
+    draft = upload.json()["draft"]
+
+    def fake_suggestions(draft_id, fields, model=None):
+        assert draft_id == draft["draft_id"]
+        assert fields["title"] == draft["fields"]["title"]
+        return {
+            "status": "suggested",
+            "model": model or "fake-local-model",
+            "suggestions": {
+                "title": "Cancer detection with local LLM",
+                "year": "2026",
+                "master_level": "M1",
+                "track": "apprentissage",
+                "keywords": "machine learning; detection",
+                "concepts": "machine learning; detection",
+                "use_case": "sante / aide au diagnostic",
+                "methodology": "comparaison experimentale",
+                "abstract": "",
+            },
+            "confidence": 0.82,
+            "notes": "fake suggestion",
+            "review_reasons": ["low_confidence"],
+        }
+
+    monkeypatch.setattr(web_app, "generate_import_suggestions", fake_suggestions)
+
+    response = client.post(
+        f"/api/imports/{draft['draft_id']}/llm-suggestions",
+        json={"fields": draft["fields"]},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "suggested"
+    assert data["suggestions"]["title"] == "Cancer detection with local LLM"
+    with connect(tmp_path / "web.sqlite") as conn:
+        count = conn.execute("SELECT COUNT(*) AS count FROM documents").fetchone()
+    assert count["count"] == 2
+
+
+def test_import_llm_unavailable_is_non_blocking(tmp_path, monkeypatch):
+    stub_pdf_text(monkeypatch)
+    client = client_for(tmp_path, monkeypatch)
+    upload = client.post(
+        "/api/imports",
+        files={"file": ("new_thesis.pdf", sample_pdf_bytes(), "application/pdf")},
+    )
+    draft = upload.json()["draft"]
+
+    def unavailable(*_args, **_kwargs):
+        raise LLMUnavailableError("Ollama unavailable")
+
+    monkeypatch.setattr(web_app, "generate_import_suggestions", unavailable)
+
+    response = client.post(
+        f"/api/imports/{draft['draft_id']}/llm-suggestions",
+        json={"fields": draft["fields"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "unavailable"
