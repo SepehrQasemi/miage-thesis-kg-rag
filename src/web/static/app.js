@@ -8,12 +8,15 @@ const state = {
   selectedImportIndex: -1,
   importBusy: false,
   llmSuggestions: null,
+  datasetColumns: [],
+  datasetRows: [],
 };
 
 const viewTitles = {
   dashboard: ["Dashboard", "Overview of the extracted thesis graph."],
   search: ["Thesis Search", "Search and filter thesis metadata through graph relations."],
   concepts: ["Concepts", "Explore frequent concepts and their connected theses."],
+  dataset: ["Dataset CSV", "View every extracted thesis row in one table."],
   import: ["Import PDF", "Add a new thesis through extraction, review, and approval."],
 };
 
@@ -77,7 +80,7 @@ function formatNumber(value) {
 
 function truncate(value, length = 120) {
   const text = String(value ?? "");
-  return text.length > length ? `${text.slice(0, length - 1)}…` : text;
+  return text.length > length ? `${text.slice(0, length - 3)}...` : text;
 }
 
 async function init() {
@@ -102,6 +105,7 @@ function bindControls() {
   qs("#discard-import-button").addEventListener("click", discardCurrentImport);
   qs("#generate-llm-button").addEventListener("click", generateLlmSuggestions);
   qs("#apply-llm-button").addEventListener("click", applyLlmSuggestions);
+  qs("#copy-csv-button").addEventListener("click", copyDatasetCsv);
   qs("#text-query").addEventListener("keydown", (event) => {
     if (event.key === "Enter") runSearch();
   });
@@ -114,10 +118,13 @@ function setView(view) {
   qs(`#${view}-view`).classList.add("active");
   qs("#view-title").textContent = viewTitles[view][0];
   qs("#view-subtitle").textContent = viewTitles[view][1];
+  if (view === "dataset" && state.datasetRows.length === 0) {
+    loadDataset();
+  }
 }
 
 async function refreshAll() {
-  await Promise.all([loadDashboard(), loadFacets()]);
+  await Promise.all([loadDashboard(), loadFacets(), loadDataset()]);
   await runSearch();
   await loadConceptIndex();
 }
@@ -174,6 +181,73 @@ function renderRankList(container, items) {
       </div>
     `)
     .join("");
+}
+
+async function loadDataset() {
+  const status = qs("#dataset-status");
+  if (!status) return;
+  status.textContent = "Loading complete dataset...";
+  status.className = "status-banner working-banner";
+  try {
+    const payload = await api.get("/api/dataset");
+    state.datasetColumns = payload.columns || [];
+    state.datasetRows = payload.rows || [];
+    renderDataset();
+    status.textContent = "Complete CSV dataset loaded.";
+    status.className = "status-banner success-banner";
+  } catch (error) {
+    status.textContent = `Dataset load failed: ${error.message}`;
+    status.className = "status-banner error-banner";
+  }
+}
+
+function renderDataset() {
+  qs("#dataset-count").textContent = `${formatNumber(state.datasetRows.length)} rows | ${formatNumber(state.datasetColumns.length)} columns`;
+  qs("#dataset-head").innerHTML = `
+    <tr>
+      ${state.datasetColumns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}
+    </tr>
+  `;
+  qs("#dataset-body").innerHTML = state.datasetRows
+    .map((row) => `
+      <tr>
+        ${state.datasetColumns
+          .map((column) => `<td class="csv-cell">${escapeHtml(row[column] ?? "")}</td>`)
+          .join("")}
+      </tr>
+    `)
+    .join("");
+}
+
+function csvEscape(value) {
+  const text = String(value ?? "");
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+  return text;
+}
+
+async function copyDatasetCsv() {
+  if (!state.datasetRows.length) {
+    renderDatasetCopyStatus("Load the dataset before copying.", "warning");
+    return;
+  }
+  const lines = [
+    state.datasetColumns.map(csvEscape).join(","),
+    ...state.datasetRows.map((row) => state.datasetColumns.map((column) => csvEscape(row[column])).join(",")),
+  ];
+  try {
+    await navigator.clipboard.writeText(lines.join("\n"));
+    renderDatasetCopyStatus("CSV copied to clipboard.", "success");
+  } catch (_error) {
+    renderDatasetCopyStatus("Copy failed in this browser. Use Download CSV instead.", "warning");
+  }
+}
+
+function renderDatasetCopyStatus(message, kind) {
+  const status = qs("#dataset-status");
+  status.textContent = message;
+  status.className = `status-banner ${kind || "muted"}-banner`;
 }
 
 async function runSearch() {
@@ -279,8 +353,8 @@ function renderTags(items, variant = "") {
 function renderSimilarRow(row) {
   return `
     <div class="mini-row">
-      <strong>${escapeHtml(row.thesis_id)} · ${escapeHtml(truncate(row.title, 88))}</strong>
-      <span>${escapeHtml(row.year)} · ${escapeHtml(row.master_level)} · ${escapeHtml(row.shared_concepts?.join("; ") || "")}</span>
+      <strong>${escapeHtml(row.thesis_id)} | ${escapeHtml(truncate(row.title, 88))}</strong>
+      <span>${escapeHtml(row.year)} | ${escapeHtml(row.master_level)} | ${escapeHtml(row.shared_concepts?.join("; ") || "")}</span>
     </div>
   `;
 }
@@ -316,8 +390,8 @@ function renderConceptDetail(detail) {
       <div class="mini-list">
         ${(detail.theses || []).map((row) => `
           <div class="mini-row">
-            <strong>${escapeHtml(row.thesis_id)} · ${escapeHtml(truncate(row.title, 92))}</strong>
-            <span>${escapeHtml(row.year)} · ${escapeHtml(row.master_level)} · ${escapeHtml(row.use_case)}</span>
+            <strong>${escapeHtml(row.thesis_id)} | ${escapeHtml(truncate(row.title, 92))}</strong>
+            <span>${escapeHtml(row.year)} | ${escapeHtml(row.master_level)} | ${escapeHtml(row.use_case)}</span>
           </div>
         `).join("")}
       </div>
@@ -326,7 +400,7 @@ function renderConceptDetail(detail) {
       <h4>Related concepts</h4>
       <div class="tag-cloud">
         ${(detail.related_concepts || []).map((item) => `
-          <span class="tag accent">${escapeHtml(item.label)} · ${formatNumber(item.shared_theses)}</span>
+          <span class="tag accent">${escapeHtml(item.label)} | ${formatNumber(item.shared_theses)}</span>
         `).join("")}
       </div>
     </div>

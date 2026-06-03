@@ -101,7 +101,7 @@ Required JSON shape:
   "title": "string",
   "year": "YYYY or N/A",
   "master_level": "M1 or M2 or N/A",
-  "track": "apprentissage or mixte or N/A",
+  "track": "apprentissage or classique or N/A",
   "keywords": ["string"],
   "concepts": ["string"],
   "use_case": "string",
@@ -115,7 +115,8 @@ Rules:
 - title is the thesis subject, not the author, university, program name, table of contents, or acknowledgements.
 - year must be the defense/submission year when visible; otherwise N/A.
 - master_level must be exactly M1, M2, or N/A.
-- track must be exactly apprentissage, mixte, or N/A.
+- track must be exactly apprentissage, classique, or N/A.
+- If the student is not in apprentissage, use classique.
 - keywords and concepts must be short comparable terms separated as JSON arrays.
 - use_case must be a practical application domain, for example "sante / aide au diagnostic" or "cybersecurite / detection d'attaques".
 - methodology must be a short method label, for example "comparaison experimentale", "revue de litterature / etat de l'art", or "analyse de donnees".
@@ -150,7 +151,7 @@ def normalize_suggestions(raw: dict[str, Any]) -> dict[str, Any]:
         "title": clean_text(raw.get("title")),
         "year": clean_year(raw.get("year")),
         "master_level": clean_choice(raw.get("master_level"), {"M1", "M2", "N/A"}, uppercase=True),
-        "track": clean_choice(raw.get("track"), {"apprentissage", "mixte", "N/A"}, uppercase=False),
+        "track": clean_choice(str(raw.get("track") or "").lower().replace("mixte", "classique"), {"apprentissage", "classique", "N/A"}, uppercase=False),
         "keywords": clean_terms(raw.get("keywords")),
         "concepts": clean_terms(raw.get("concepts")),
         "use_case": clean_text(raw.get("use_case")),
@@ -221,6 +222,8 @@ def clean_year(value: Any) -> str:
 
 def clean_choice(value: Any, allowed: set[str], uppercase: bool) -> str:
     text = clean_text(value)
+    if text.upper() == "N/A" and "N/A" in allowed:
+        return "N/A"
     text = text.upper() if uppercase else text.lower()
     return text if text in allowed else ""
 

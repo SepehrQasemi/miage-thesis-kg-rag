@@ -100,6 +100,8 @@ The system stores only useful front-matter text for now:
 
 `abstract` is useful when it exists, but it is not required for quality approval because many theses do not provide a comparable abstract section. The comparable fields are title, year, master level, track, keywords, concepts, use case, and methodology.
 
+For `track`, the project uses two comparable categories: `apprentissage` and `classique`. Legacy or source labels such as `mixte` are normalized to `classique`; if a thesis is not identified as `apprentissage`, it is treated as a classical student track.
+
 Full-text RAG is intentionally postponed.
 
 ## Knowledge Graph
@@ -153,6 +155,7 @@ It includes:
 - thesis detail panel
 - similar theses
 - concept explorer
+- complete dataset table with CSV copy/download
 - direct PDF link for each thesis
 - PDF import with single-file or multi-file staging, metadata review, approval, CSV export, and graph refresh
 - optional local Ollama suggestions for import review
@@ -321,7 +324,7 @@ python scripts/export_csv.py --output data/processed/theses_sample.csv
    - year
    - title
    - M1/M2
-   - apprentissage/mixte
+   - apprentissage/classique
    - abstract/introduction when headings are clear
 5. Use local NLP rules for keywords and concepts.
 6. Use rule-based classifiers for use case and methodology.

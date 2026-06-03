@@ -19,16 +19,20 @@
 
         <nav class="nav-list" aria-label="Primary">
           <button class="nav-item active" data-view="dashboard" type="button">
-            <span class="nav-icon" aria-hidden="true">⌁</span>
+            <span class="nav-icon" aria-hidden="true">D</span>
             Dashboard
           </button>
           <button class="nav-item" data-view="search" type="button">
-            <span class="nav-icon" aria-hidden="true">⌕</span>
+            <span class="nav-icon" aria-hidden="true">S</span>
             Thesis Search
           </button>
           <button class="nav-item" data-view="concepts" type="button">
-            <span class="nav-icon" aria-hidden="true">◎</span>
+            <span class="nav-icon" aria-hidden="true">G</span>
             Concepts
+          </button>
+          <button class="nav-item" data-view="dataset" type="button">
+            <span class="nav-icon" aria-hidden="true">CSV</span>
+            Dataset
           </button>
           <button class="nav-item" data-view="import" type="button">
             <span class="nav-icon" aria-hidden="true">+</span>
@@ -50,7 +54,7 @@
           </div>
           <div class="topbar-actions">
             <button class="icon-button" id="refresh-button" type="button" title="Refresh data" aria-label="Refresh data">
-              ↻
+              R
             </button>
           </div>
         </header>
@@ -152,6 +156,28 @@
           </div>
         </section>
 
+        <section id="dataset-view" class="view">
+          <section class="panel dataset-panel">
+            <div class="panel-header dataset-header">
+              <div>
+                <h3>Complete CSV Dataset</h3>
+                <span id="dataset-count" class="muted"></span>
+              </div>
+              <div class="dataset-actions">
+                <button class="secondary-button" id="copy-csv-button" type="button">Copy CSV</button>
+                <a class="primary-button download-button" href="/api/dataset.csv" download="miage_theses.csv">Download CSV</a>
+              </div>
+            </div>
+            <div id="dataset-status" class="status-banner muted-banner">Loading dataset...</div>
+            <div class="table-scroll dataset-scroll">
+              <table class="dataset-table">
+                <thead id="dataset-head"></thead>
+                <tbody id="dataset-body"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
         <section id="import-view" class="view">
           <div class="import-grid">
             <section class="panel">
@@ -196,7 +222,7 @@
                     Track
                     <select id="review-track" name="track">
                       <option value="apprentissage">apprentissage</option>
-                      <option value="mixte">mixte</option>
+                      <option value="classique">classique</option>
                       <option value="N/A">N/A</option>
                     </select>
                   </label>

@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from common.paths import db_path, raw_pdf_dir
+from common.pipeline_outputs import DOCUMENT_EXPORT_COLUMNS, active_documents, write_document_csv
 from graph.query import GraphQueryService
 from ingestion.import_workflow import (
     ImportWorkflowError,
@@ -73,6 +74,26 @@ def summary() -> dict:
 @app.get("/api/facets")
 def facets() -> dict:
     return service().facets()
+
+
+@app.get("/api/dataset")
+def dataset() -> dict:
+    rows = active_documents(database_path())
+    export_rows = [
+        {column: row.get(column, "") for column in DOCUMENT_EXPORT_COLUMNS}
+        for row in rows
+    ]
+    return {
+        "columns": DOCUMENT_EXPORT_COLUMNS,
+        "count": len(export_rows),
+        "rows": export_rows,
+    }
+
+
+@app.get("/api/dataset.csv")
+def dataset_csv() -> FileResponse:
+    csv_path = write_document_csv(database_path())
+    return FileResponse(csv_path, media_type="text/csv", filename="miage_theses.csv")
 
 
 @app.get("/api/top/{node_type}")

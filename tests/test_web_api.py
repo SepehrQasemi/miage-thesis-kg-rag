@@ -138,6 +138,31 @@ def test_filtered_thesis_search_uses_graph_filters(tmp_path, monkeypatch):
     assert [row["thesis_id"] for row in response.json()] == ["thesis_0001"]
 
 
+def test_dataset_endpoint_returns_complete_csv_rows(tmp_path, monkeypatch):
+    client = client_for(tmp_path, monkeypatch)
+
+    response = client.get("/api/dataset")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] == 2
+    assert data["columns"][:4] == ["thesis_id", "file_name", "pages_count", "year"]
+    assert [row["thesis_id"] for row in data["rows"]] == ["thesis_0001", "thesis_0002"]
+    assert data["rows"][0]["title"] == "Cancer detection"
+
+
+def test_dataset_csv_download_returns_export_file(tmp_path, monkeypatch):
+    client = client_for(tmp_path, monkeypatch)
+
+    response = client.get("/api/dataset.csv")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    body = response.content.decode("utf-8-sig")
+    assert "thesis_id,file_name,pages_count,year,title" in body
+    assert "thesis_0001" in body
+
+
 def test_import_upload_creates_review_draft(tmp_path, monkeypatch):
     stub_pdf_text(monkeypatch)
     client = client_for(tmp_path, monkeypatch)

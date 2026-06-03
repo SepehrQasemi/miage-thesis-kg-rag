@@ -48,6 +48,8 @@ def repair_display_text(text: str) -> str:
     """Make extracted PDF text more readable without relying on paid services."""
     text = re.sub(r"([A-Za-z])\s*[´`ˆ^]\s*([A-Za-z])", r"\1\2", text)
     text = text.replace("` a", "a").replace("`e", "e")
+    text = text.replace("`A", "A").replace("`E", "E").replace("´A", "A").replace("´E", "E")
+    text = text.replace("`", "").replace("´", "")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 

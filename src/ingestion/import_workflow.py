@@ -27,7 +27,7 @@ from nlp.keyword_extractor import extract_keywords_for_corpus, normalize_concept
 
 
 ALLOWED_MASTER_LEVELS = {"M1", "M2", "N/A"}
-ALLOWED_TRACKS = {"apprentissage", "mixte", "N/A"}
+ALLOWED_TRACKS = {"apprentissage", "classique", "N/A"}
 
 
 class ImportWorkflowError(ValueError):
@@ -577,8 +577,10 @@ def clean_master_level(value: Any) -> str:
 
 def clean_track(value: Any) -> str:
     track = clean_text(value).lower() or "N/A"
+    if track == "mixte":
+        track = "classique"
     if track not in ALLOWED_TRACKS:
-        raise ImportWorkflowError("Track must be apprentissage, mixte, or N/A.")
+        raise ImportWorkflowError("Track must be apprentissage, classique, or N/A.")
     return track
 
 

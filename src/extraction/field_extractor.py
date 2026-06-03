@@ -89,20 +89,45 @@ def extract_track(cover_text: str) -> str:
     for line in lines(cover_text)[:12]:
         spaced, compact = normalize_for_match(line)
         if "mastermiage" in compact or "miage" in spaced:
-            if "apprentissage" in spaced:
+            if (
+                "miageapp" in compact
+                or "m1miageapp" in compact
+                or "m2miageapp" in compact
+                or "mastermiageapp" in compact
+                or "mastermiageapprentissage" in compact
+                or "parcoursapprentissage" in compact
+                or re.search(r"\(\s*apprentissage\s*\)", line, flags=re.IGNORECASE)
+            ):
                 return "apprentissage"
-            if "mixte" in spaced:
-                return "mixte"
-    if has_any("\n".join(lines(cover_text)[:12]), ["apprentissage"]):
+            if "mixte" in spaced or "classique" in spaced:
+                return "classique"
+            return "classique"
+    first_lines = "\n".join(lines(cover_text)[:12])
+    first_spaced, first_compact = normalize_for_match(first_lines)
+    if (
+        "miageapp" in first_compact
+        or "m1miageapp" in first_compact
+        or "m2miageapp" in first_compact
+        or "maitredapprentissage" in first_compact
+        or "maitresdapprentissage" in first_compact
+        or re.search(r"\(\s*apprentissage\s*\)", first_lines, flags=re.IGNORECASE)
+    ):
         return "apprentissage"
-    if has_any("\n".join(lines(cover_text)[:12]), ["mixte"]):
-        return "mixte"
+    if "mixte" in first_spaced or "classique" in first_spaced:
+        return "classique"
     spaced, compact = normalize_for_match(cover_text)
-    if "miageapp" in compact or "m2miageapp" in compact or "maitredapprentissage" in compact or "maitredapprentissage" in spaced:
+    if (
+        "miageapp" in compact
+        or "m2miageapp" in compact
+        or "maitredapprentissage" in compact
+        or "maitresdapprentissage" in compact
+        or "maitredapprentissage" in spaced
+        or "maitresdapprentissage" in spaced
+    ):
         return "apprentissage"
-    if "parcoursclassique" in compact:
-        return "mixte"
-    return ""
+    if "parcoursclassique" in compact or "mixte" in spaced:
+        return "classique"
+    return "classique"
 
 
 def extract_year(cover_text: str) -> int | None:
@@ -171,6 +196,7 @@ def _looks_like_person_name(text: str) -> bool:
 
 def _clean_title_candidate(parts: list[str]) -> str:
     title = " ".join(part.strip(" :-") for part in parts if part.strip(" :-"))
+    title = repair_display_text(title)
     title = _repair_glued_title_spacing(title)
     title = re.sub(r"\s+", " ", title).strip(" :-")
     return repair_display_text(title)
@@ -194,6 +220,7 @@ def _repair_glued_title_spacing(title: str) -> str:
         (r"del'\s*", "de l'"),
         (r"dansles", "dans les"),
         (r"Processusde", "Processus de"),
+        (r"Modelesde", "Modeles de"),
         (r"Controlede", "Controle de"),
         (r"Contrôlede", "Contrôle de"),
         (r"Qualitedes", "Qualite des"),
@@ -245,7 +272,7 @@ def _title_parts_after_marker(cover_lines: list[str], marker_index: int) -> list
     inline_title = _inline_title_after_master_miage(marker_line)
     if inline_title:
         return [inline_title]
-    has_track_parenthesis = ")" in marker_line and any(track in marker_compact for track in ["apprentissage", "mixte"])
+    has_track_parenthesis = ")" in marker_line and any(track in marker_compact for track in ["apprentissage", "mixte", "classique"])
     if "mastermiage" in marker_compact and has_track_parenthesis:
         after_program = marker_line.split(")", 1)[1].strip()
         after_program = re.split(r"\bEntreprise\b|\bMemoire\b|\bM\W*emoire\b", after_program, maxsplit=1, flags=re.IGNORECASE)[0]

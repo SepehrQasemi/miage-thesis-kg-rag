@@ -27,7 +27,7 @@ REVIEW_SCHEMA: dict[str, Any] = {
         "title": {"type": "string"},
         "year": {"type": "integer"},
         "master_level": {"type": "string", "enum": ["M1", "M2", "unknown"]},
-        "track": {"type": "string", "enum": ["apprentissage", "mixte", "unknown"]},
+        "track": {"type": "string", "enum": ["apprentissage", "classique", "unknown"]},
         "abstract": {"type": "string"},
         "concepts": {"type": "array", "items": {"type": "string"}},
         "use_case": {"type": "string"},
@@ -106,7 +106,7 @@ def build_prompt(row) -> str:
             "If title_candidates contains the thesis subject, use the best candidate as title. "
             "title is the research subject only; it is never a table of contents, author name, university name, program name, or acknowledgements. "
             "master_level must be exactly M1, M2, or unknown. Convert Master 2, 2eme annee, MASTER M2 to M2. "
-            "track must be exactly apprentissage, mixte, or unknown. Never put the title in track. "
+            "track must be exactly apprentissage, classique, or unknown. If the student is not in apprentissage, use classique. Never put the title in track. "
             "Also fill abstract only if a real Resume/Abstract appears in the text."
         )
     elif "missing_abstract" in notes:
@@ -195,8 +195,8 @@ def normalize_track(value: Any) -> str:
     spaced, _ = normalize_for_match(value_or_empty(value))
     if "apprentissage" in spaced:
         return "apprentissage"
-    if "mixte" in spaced:
-        return "mixte"
+    if "mixte" in spaced or "classique" in spaced:
+        return "classique"
     return ""
 
 

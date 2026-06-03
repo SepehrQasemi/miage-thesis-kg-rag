@@ -43,7 +43,7 @@ def seed_database(db_file: Path) -> None:
     rows = [
         document("thesis_0001", "Cancer detection", "machine learning; detection; sante"),
         document("thesis_0002", "Medical AI", "IA; detection; sante"),
-        document("thesis_0003", "Cloud security", "cybersecurite; cloud computing; detection", year="2024", track="mixte"),
+        document("thesis_0003", "Cloud security", "cybersecurite; cloud computing; detection", year="2024", track="classique"),
     ]
     graph = build_knowledge_graph(rows, related_min_shared_concepts=2)
     with connect(db_file) as conn:
@@ -195,6 +195,17 @@ def test_concept_explorer_shows_connected_theses(page):
     expect(concept_detail.locator(".tag", has_text="detection")).to_be_visible()
 
 
+def test_dataset_view_shows_complete_csv_table(page):
+    page.get_by_role("button", name="Dataset").click()
+
+    expect(page.locator("#dataset-count")).to_contain_text("3 rows")
+    expect(page.locator("#dataset-head")).to_contain_text("thesis_id")
+    expect(page.locator("#dataset-head")).to_contain_text("methodology")
+    expect(page.locator("#dataset-body")).to_contain_text("thesis_0001")
+    expect(page.locator("#dataset-body")).to_contain_text("Cancer detection")
+    expect(page.locator("a.download-button")).to_have_attribute("href", "/api/dataset.csv")
+
+
 def test_import_review_approval_workflow(page, tmp_path):
     pdf_path = sample_pdf_file(tmp_path, "renewable_energy_prediction.pdf")
     second_pdf_path = sample_pdf_file(tmp_path, "student_services_chatbot.pdf")
@@ -250,7 +261,7 @@ def test_import_review_approval_workflow(page, tmp_path):
 
 
 def test_responsive_views_have_no_horizontal_overflow(page):
-    view_buttons = ["Dashboard", "Thesis Search", "Concepts", "Import PDF"]
+    view_buttons = ["Dashboard", "Thesis Search", "Concepts", "Dataset", "Import PDF"]
     viewports = [
         {"width": 390, "height": 800},
         {"width": 768, "height": 900},

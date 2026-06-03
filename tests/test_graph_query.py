@@ -28,7 +28,7 @@ def make_service(tmp_path):
     rows = [
         row("thesis_0001", "Cancer detection", "machine learning; detection; sante"),
         row("thesis_0002", "Medical classification", "IA; detection; sante"),
-        row("thesis_0003", "Cloud security", "cybersecurite; cloud computing; detection", track="mixte"),
+        row("thesis_0003", "Cloud security", "cybersecurite; cloud computing; detection", track="classique"),
     ]
     graph = build_knowledge_graph(rows, related_min_shared_concepts=2)
     with connect(db_file) as conn:
@@ -116,7 +116,7 @@ def test_list_theses_keeps_missing_years_last(tmp_path):
             )
             VALUES (
                 'thesis_0999', 'thesis_0999.pdf', '/tmp/thesis_0999.pdf', 'missing-year',
-                10, 'N/A', 'Missing year', 'M1', 'mixte', '', 'cloud', 'cloud computing',
+                10, 'N/A', 'Missing year', 'M1', 'classique', '', 'cloud', 'cloud computing',
                 'developpement logiciel / devops', 'comparaison experimentale', 1.0, 'active'
             )
             """

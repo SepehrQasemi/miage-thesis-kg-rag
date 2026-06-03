@@ -26,7 +26,7 @@ REQUIRED_FIELDS = [
 ]
 
 ALLOWED_MASTER_LEVELS = {"M1", "M2", "N/A"}
-ALLOWED_TRACKS = {"apprentissage", "mixte", "N/A"}
+ALLOWED_TRACKS = {"apprentissage", "classique", "N/A"}
 
 
 def text(value: Any) -> str:

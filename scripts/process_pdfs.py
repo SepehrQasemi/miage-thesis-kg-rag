@@ -202,6 +202,11 @@ def write_quality_report(records: list[dict]) -> Path:
 def finalize_record(record: dict, keywords: list[str], concepts: list[str]) -> dict:
     record["keywords"] = "; ".join(keywords)
     record["concepts"] = "; ".join(concepts)
+    inferred_na_notes = []
+    for field in ["year", "master_level", "track"]:
+        if not record.get(field):
+            record[field] = "N/A"
+            inferred_na_notes.append(f"{field}_not_found_set_na")
     fields_for_score = {
         "title": record["title"],
         "year": record["year"],
@@ -224,8 +229,10 @@ def finalize_record(record: dict, keywords: list[str], concepts: list[str]) -> d
     ]:
         if not value:
             notes.append(label)
+    blocking_notes = list(notes)
+    notes.extend(inferred_na_notes)
     notes.extend(record.get("_source_notes", []))
-    record["needs_review"] = 1 if record["extraction_confidence"] < 0.70 or notes else 0
+    record["needs_review"] = 1 if record["extraction_confidence"] < 0.70 or blocking_notes else 0
     record["status"] = "active"
     record["extraction_notes"] = "; ".join(notes)
     record["processed_at"] = datetime.now().isoformat(timespec="seconds")

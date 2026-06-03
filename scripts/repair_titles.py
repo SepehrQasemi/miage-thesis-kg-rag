@@ -18,12 +18,14 @@ from extraction.field_extractor import (
 
 def valid_master_level(value: str | None) -> str:
     value = (value or "").strip()
-    return value if value in {"M1", "M2"} else ""
+    return value if value in {"M1", "M2", "N/A"} else ""
 
 
 def valid_track(value: str | None) -> str:
-    value = (value or "").strip()
-    return value if value in {"apprentissage", "mixte"} else ""
+    value = (value or "").strip().lower()
+    if value == "mixte":
+        return "classique"
+    return value if value in {"apprentissage", "classique", "N/A"} else ""
 
 
 def recompute(row: dict) -> tuple[float, int, str]:

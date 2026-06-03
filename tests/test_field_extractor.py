@@ -75,7 +75,7 @@ Memoire de M1 Master MIAGE (apprentissage) Gestion des Fuites de Donnees dans l'
     )
 
 
-def test_extract_title_same_line_after_master_miage_mixte():
+def test_extract_title_same_line_after_master_miage_classique():
     cover_text = """
 Memoire de M1 Master MIAGE Mixte Etat de l'art : Analyse des outils et algorithmes pour la prediction de parties dans le jeu League of Legends presente et soutenu par Ronan BESNARD
 """
@@ -158,6 +158,18 @@ def test_extract_glued_title_before_university_marker():
     assert extract_title(cover_text) == (
         "Integration de l'Intelligence Artificielle dans les Processus de Controle de Qualite des Logiciels"
     )
+    artifact_cover_text = """
+Universite Paris Nanterre
+Master MIAGE
+Algorithmes de S` election de Variables et
+Optimisation des Hyperparam` etres :
+Comment Maximiser l'Efficacit` e des Mod` elesde s` election de variables ?
+Realise par Nora
+"""
+    assert extract_title(artifact_cover_text) == (
+        "Algorithmes de Selection de Variables et Optimisation des Hyperparametres "
+        "Comment Maximiser l'Efficacite des Modeles de selection de variables ?"
+    )
 
 
 def test_reject_table_of_contents_as_title():
@@ -195,7 +207,9 @@ def test_use_case_specific_domains():
 
 def test_track_and_master_fallbacks():
     assert extract_track("Memoire de 2eme annee Master 2 MIAGE APP") == "apprentissage"
-    assert extract_track("Rapport de stage M2 MIAGE, parcours classique") == "mixte"
+    assert extract_track("Rapport de stage M2 MIAGE, parcours classique") == "classique"
+    assert extract_track("Master MIAGE Conception d'un algorithme utilisant l'apprentissage machine") == "classique"
+    assert extract_track("Je remercie mes maîtres d’apprentissage pour leurs conseils.") == "apprentissage"
     assert extract_master_level("Memoire de fin de cycle en vue d'obtention du diplome de Master MIAGE") == "M2"
 
 

@@ -36,7 +36,7 @@ The graph is also stored in SQLite tables:
 | `Methodology` | Methodology category | `methodology:revue-de-litterature-etat-de-l-art` |
 | `Year` | Thesis year | `year:2025` |
 | `MasterLevel` | `M1`, `M2`, or `N/A` | `masterlevel:m1` |
-| `Track` | `apprentissage`, `mixte`, or `N/A` | `track:apprentissage` |
+| `Track` | `apprentissage`, `classique`, or `N/A` | `track:apprentissage` |
 
 Each node has:
 
@@ -57,7 +57,7 @@ Each node has:
 | `USES_METHODOLOGY` | `Thesis` | `Methodology` | Thesis uses a methodology category |
 | `SUBMITTED_IN` | `Thesis` | `Year` | Thesis was submitted in a given year |
 | `HAS_MASTER_LEVEL` | `Thesis` | `MasterLevel` | Thesis belongs to M1/M2 |
-| `HAS_TRACK` | `Thesis` | `Track` | Thesis belongs to apprenticeship/mixed track |
+| `HAS_TRACK` | `Thesis` | `Track` | Thesis belongs to apprenticeship/classical track |
 | `RELATED_TO` | `Thesis` | `Thesis` | Inferred relation based on shared concepts |
 
 `RELATED_TO` edges are inferred and undirected by interpretation. They are stored once, from the lower thesis ID to the higher thesis ID, to avoid duplicates.
@@ -69,6 +69,7 @@ The first version uses deterministic local normalization:
 - labels are stripped and whitespace-normalized;
 - entity IDs are ASCII slugs;
 - known concept aliases are canonicalized, for example `IA` becomes `intelligence artificielle`;
+- track labels are normalized to `apprentissage` or `classique`; legacy/source labels such as `mixte` are represented as `classique`;
 - raw PDF files are never modified;
 - manual corrections remain traceable in `data/manual_overrides/theses_metadata.csv`.
 

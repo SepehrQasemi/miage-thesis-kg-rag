@@ -40,6 +40,7 @@ The first version contains:
 - Thesis Search: search, filters, thesis table
 - Thesis Detail: metadata, concepts, keywords, similar theses, PDF link
 - Concepts: concept index, connected theses, related concepts
+- Dataset: complete extracted dataset table with CSV copy and download actions
 - Import PDF: upload one or more PDFs, extract, review each draft, approve, and refresh the local graph
 
 ## API
@@ -49,6 +50,8 @@ Main endpoints:
 ```text
 GET /api/summary
 GET /api/facets
+GET /api/dataset
+GET /api/dataset.csv
 GET /api/theses
 GET /api/theses/{thesis_id}
 GET /api/theses/{thesis_id}/similar
@@ -119,11 +122,12 @@ The UI must stay usable on:
 - tablet: around 768px width
 - desktop: around 1440px width
 
-The current layout has been checked on dashboard, thesis search, and concept explorer views. The checks confirmed:
+The current layout has been checked on dashboard, thesis search, dataset, import, and concept explorer views. The checks confirmed:
 
 - no horizontal page overflow
 - sidebar collapses above the main content on smaller screens
 - filters stack on mobile
+- the complete dataset table stays inside its own horizontal scroll area
 - thesis table remains scrollable inside its panel
 - detail panels move below the main content on smaller screens
 
@@ -140,6 +144,7 @@ These tests start the FastAPI app with a temporary SQLite database and verify:
 - selecting a thesis opens the detail panel;
 - similar theses are shown;
 - concept explorer loads connected theses and related concepts;
+- complete dataset rows are shown with a CSV download link;
 - PDF import creates a review draft;
 - local LLM suggestions are non-blocking and do not update the database by themselves;
 - approving an import updates the database, CSV, graph tables, and search UI;

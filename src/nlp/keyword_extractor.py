@@ -9,7 +9,7 @@ STOPWORDS = {
     "les", "des", "une", "un", "dans", "pour", "avec", "sur", "par", "aux", "est", "sont", "etre",
     "cette", "cet", "ces", "qui", "que", "dont", "leur", "leurs", "plus", "nous", "vous", "notre",
     "votre", "elle", "ils", "elles", "afin", "ainsi", "comme", "entre", "sans", "vers", "mise",
-    "place", "cadre", "memoire", "master", "miage", "apprentissage", "mixte", "entreprise",
+    "place", "cadre", "memoire", "master", "miage", "apprentissage", "classique", "mixte", "entreprise",
     "accueil", "realise", "presente", "soutenu", "soutenue", "universite", "paris", "nanterre",
     "annee", "universitaire", "jury", "soutenance", "responsable", "professeur", "maitre",
     "tuteur", "tutrice", "enseignant", "enseignante", "remerciements", "merci", "monsieur",
