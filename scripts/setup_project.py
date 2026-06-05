@@ -20,6 +20,7 @@ from common.paths import (
     staging_dir,
 )
 from common.pipeline_outputs import rebuild_graph_outputs
+from rag.embeddings import rebuild_embeddings
 
 
 DATA_DIRECTORIES = [
@@ -61,6 +62,7 @@ def initialize_database(reset: bool) -> None:
     with connect(database) as conn:
         init_schema(conn)
     rebuild_graph_outputs(database)
+    rebuild_embeddings(database)
     print(f"Database ready: {database}")
 
 

@@ -1,22 +1,45 @@
 # MIAGE Thesis Knowledge Graph + RAG
 
-This project is a local, free, no-cloud web app for managing MIAGE thesis PDFs. It extracts structured metadata, stores it in SQLite, exports CSV files, builds a Knowledge Graph, and provides a browser UI for search, graph exploration, PDF import, human review, and optional local Ollama suggestions.
+## English
 
-## Quick Start
+### Overview
 
-Requirements:
+This project is a local, free, no-cloud web application for managing MIAGE thesis PDFs.
 
-- Python 3.11 or newer
-- Git, if cloning from GitHub
-- Optional: Ollama with `qwen2.5:7b` for local LLM suggestions
+It can:
 
-Windows one-time setup:
+- import one or many thesis PDFs from the web interface;
+- extract and review structured thesis metadata;
+- store one validated row per thesis in SQLite;
+- export the complete dataset as CSV;
+- build a local Knowledge Graph;
+- build local metadata embeddings for RAG search;
+- answer questions over thesis metadata with cited sources;
+- show all RAG sources with pagination;
+- open an in-app thesis profile and then open the source PDF;
+- optionally use a local Ollama model for review suggestions.
+
+No paid API is required. Ollama is optional and runs locally.
+
+### Main Stack
+
+- Python 3.11+
+- FastAPI
+- SQLite
+- static HTML, CSS, and JavaScript
+- pypdf / PyMuPDF / pytesseract for PDF extraction and OCR fallback
+- local deterministic embeddings for the first RAG version
+- optional Ollama model: `qwen2.5:7b`
+
+### Quick Start On Windows
+
+Clone the repository, then run:
 
 ```bat
 setup_windows.cmd
 ```
 
-During setup, Windows users are asked whether they want to install Ollama and download the local model for LLM suggestions. This is optional because the model download can be several GB.
+The setup script installs Python dependencies, installs Playwright browsers, initializes the local database, creates empty graph/RAG outputs, and asks whether you want to install the optional local Ollama model.
 
 Start the app:
 
@@ -24,7 +47,13 @@ Start the app:
 run_app_windows.cmd
 ```
 
-Manual cross-platform setup:
+Open:
+
+```text
+http://127.0.0.1:8000
+```
+
+### Manual Setup
 
 ```powershell
 python -m venv .venv
@@ -34,81 +63,92 @@ python scripts/setup_project.py --install-deps --install-playwright
 python scripts/run_web_app.py --port 8000
 ```
 
-Open:
-
-```text
-http://127.0.0.1:8000
-```
-
-Check your installation:
+Check the installation:
 
 ```powershell
 python scripts/doctor.py
 ```
 
-Install or repair the optional local LLM dependency later:
+### Optional Local LLM Setup
+
+Ollama is optional. The application still works without it; only LLM suggestions are disabled.
+
+Windows helper:
 
 ```bat
 setup_ollama_windows.cmd
 ```
 
-Equivalent manual command:
+Manual command:
 
 ```powershell
 python scripts/setup_ollama.py --install --pull --model qwen2.5:7b
 ```
 
-Fresh clones work even without bundled PDFs. The setup script creates an empty SQLite database and empty graph exports. Add theses from the `Import PDF` screen, or place PDFs in `data/raw/theses_pdf/` and run:
+### Web App Features
 
-```powershell
-python scripts/setup_project.py --build-data
+The web interface contains:
+
+- `Dashboard`: dataset and graph overview;
+- `Thesis Search`: search, filters, paginated results, thesis detail profile;
+- `Concepts`: concept index and connected theses;
+- `Dataset`: complete extracted dataset, CSV copy, CSV download;
+- `Ask / RAG`: local question answering, cited sources, show-all result pagination, source profiles, PDF links;
+- `Import PDF`: upload one PDF or several PDFs, review extracted metadata, approve or discard drafts.
+
+### Import Workflow
+
+New PDFs should be added through the web UI, not by manually editing the database.
+
+Workflow:
+
+1. Open `Import PDF`.
+2. Select one PDF or multiple PDFs.
+3. The system stages each file and creates one review draft per new PDF.
+4. The system checks duplicates by PDF hash.
+5. The user reviews title, year, master level, track, keywords, concepts, use case, methodology, and abstract.
+6. Optional: ask local Ollama for suggestions.
+7. `Apply LLM suggestions` only fills the review form.
+8. `Approve` inserts the thesis into SQLite.
+9. The CSV export, Knowledge Graph, and RAG embeddings are rebuilt together.
+10. `Discard` removes the draft without changing the main dataset.
+
+### Data Model
+
+The project stores one row per thesis.
+
+Main fields:
+
+```text
+thesis_id
+file_name
+pages_count
+year
+title
+master_level
+track
+abstract
+keywords
+concepts
+use_case
+methodology
+extraction_confidence
+needs_review
+extraction_notes
 ```
 
-## Data Policy
+The `abstract` field is useful when present, but it is not mandatory because many theses do not contain a comparable abstract section.
 
-Thesis PDFs and generated research data are not committed to GitHub.
+Track normalization:
 
-The local development workspace can contain:
+- `apprentissage` means apprenticeship track;
+- every non-apprenticeship thesis is treated as `classique`.
 
-- clean raw PDFs in `data/raw/theses_pdf/`
-- local SQLite database `data/app.sqlite`
-- generated CSV, graph, report, OCR cache, and staging files under `data/`
+### Knowledge Graph
 
-Fresh clones start with no thesis PDFs. Run the setup script, then add PDFs from the `Import PDF` screen.
+The graph is built from validated metadata.
 
-## Current Version
-
-Version 1 is intentionally simple:
-
-- one SQLite database: `data/app.sqlite`
-- one main table: `documents`
-- two graph tables: `graph_nodes` and `graph_edges`
-- one row per thesis
-- one local graph export under `data/graph/`
-- no paid API
-- no cloud dependency
-- optional local LLM fallback only for review cases
-- local OCR fallback for image-only cover pages
-
-The system stores only useful front-matter text for now:
-
-- cover text from the first pages
-- OCR text from image-only front pages when needed
-- abstract
-- introduction
-- conclusion
-
-`abstract` is useful when it exists, but it is not required for quality approval because many theses do not provide a comparable abstract section. The comparable fields are title, year, master level, track, keywords, concepts, use case, and methodology.
-
-For `track`, the project uses two comparable categories: `apprentissage` and `classique`. Legacy or source labels such as `mixte` are normalized to `classique`; if a thesis is not identified as `apprentissage`, it is treated as a classical student track.
-
-Full-text RAG is intentionally postponed.
-
-## Knowledge Graph
-
-The first graph version is built from validated metadata, not from full document chunks.
-
-Graph node types:
+Node types:
 
 - `Thesis`
 - `Concept`
@@ -119,7 +159,7 @@ Graph node types:
 - `MasterLevel`
 - `Track`
 
-Main graph relations:
+Main relations:
 
 - `Thesis -> HAS_CONCEPT -> Concept`
 - `Thesis -> HAS_KEYWORD -> Keyword`
@@ -128,106 +168,215 @@ Main graph relations:
 - `Thesis -> SUBMITTED_IN -> Year`
 - `Thesis -> HAS_MASTER_LEVEL -> MasterLevel`
 - `Thesis -> HAS_TRACK -> Track`
-- `Thesis -> RELATED_TO -> Thesis` for inferred concept overlap
+- `Thesis -> RELATED_TO -> Thesis`
 
-Graph outputs:
+Graph files are generated locally under `data/graph/`.
 
-- `data/graph/nodes.csv`
-- `data/graph/edges.csv`
-- `data/graph/knowledge_graph.json`
-- `data/reports/knowledge_graph_summary.json`
-- `data/reports/knowledge_graph_node_metrics.csv`
-- `data/reports/knowledge_graph_related_theses.csv`
-- `data/reports/knowledge_graph_validation.csv`
-- `data/reports/knowledge_graph_validation_summary.json`
+### RAG
 
-Schema details are documented in `docs/knowledge_graph_schema.md`.
-Query examples are documented in `docs/knowledge_graph_queries.md`.
+The first RAG version is metadata-based, not full-PDF chunk-based.
 
-## Local Web App
+For each thesis, the system builds one retrieval text from:
 
-The first local UI is available as a FastAPI app with static HTML/CSS/JavaScript.
+- title;
+- concepts;
+- keywords;
+- use case;
+- methodology;
+- abstract / introduction / conclusion when available.
 
-It includes:
+The web app can:
 
-- dashboard
-- thesis search and filters
-- thesis detail panel
-- similar theses
-- concept explorer
-- complete dataset table with CSV copy/download
-- direct PDF link for each thesis
-- PDF import with single-file or multi-file staging, metadata review, approval, CSV export, and graph refresh
-- optional local Ollama suggestions for import review
+- answer with local retrieval only;
+- optionally use Ollama for answer generation;
+- show cited thesis sources;
+- show all ranked sources with 20 results per page;
+- open each source as an in-app thesis profile;
+- open the associated PDF from the profile.
 
-Run it locally:
+### Data Policy
+
+Private thesis PDFs and generated local data are not committed to GitHub.
+
+Ignored by Git:
+
+- `data/*`, except `data/README.md`;
+- `output/`;
+- `.env`;
+- `.venv/`;
+- caches and Python bytecode.
+
+A fresh clone starts with an empty local database. Add PDFs through the UI.
+
+### Tests And Validation
+
+Run all tests:
+
+```powershell
+python -m pytest
+```
+
+Validate local data, graph, and embeddings:
+
+```powershell
+python scripts/validate_dataset.py
+python scripts/validate_knowledge_graph.py
+python scripts/validate_embeddings.py
+```
+
+Run RAG benchmarks:
+
+```powershell
+python scripts/evaluate_rag_benchmark.py
+python scripts/evaluate_rag_comprehensive.py
+```
+
+### Important Commands
 
 ```powershell
 python scripts/setup_project.py
 python scripts/run_web_app.py --port 8000
+python scripts/doctor.py
+python scripts/run_pipeline.py
+python scripts/build_knowledge_graph.py
+python scripts/build_embeddings.py
+python scripts/query_knowledge_graph.py summary
 ```
 
-Open:
+### Documentation
+
+- `docs/quickstart.md`
+- `docs/web_app.md`
+- `docs/knowledge_graph_schema.md`
+- `docs/knowledge_graph_queries.md`
+- `docs/rag.md`
+- `docs/github_release_checklist.md`
+
+---
+
+## Francais
+
+### Vue D'ensemble
+
+Ce projet est une application web locale, gratuite et sans cloud pour gerer des memoires MIAGE au format PDF.
+
+Elle permet de:
+
+- importer un ou plusieurs PDF depuis l'interface web;
+- extraire et verifier des metadonnees structurees;
+- stocker une ligne validee par memoire dans SQLite;
+- exporter le jeu de donnees complet en CSV;
+- construire un graphe de connaissances local;
+- construire des embeddings locaux pour la recherche RAG;
+- poser des questions sur les metadonnees des memoires avec des sources citees;
+- afficher toutes les sources RAG avec pagination;
+- ouvrir un profil de memoire dans l'application, puis ouvrir le PDF source;
+- utiliser optionnellement un modele Ollama local pour proposer des corrections.
+
+Aucune API payante n'est necessaire. Ollama est optionnel et fonctionne localement.
+
+### Stack Technique
+
+- Python 3.11+
+- FastAPI
+- SQLite
+- HTML, CSS et JavaScript statiques
+- pypdf / PyMuPDF / pytesseract pour l'extraction PDF et l'OCR de secours
+- embeddings locaux deterministes pour la premiere version RAG
+- modele Ollama optionnel: `qwen2.5:7b`
+
+### Demarrage Rapide Sous Windows
+
+Apres avoir clone le depot, lancer:
+
+```bat
+setup_windows.cmd
+```
+
+Ce script installe les dependances Python, installe les navigateurs Playwright, initialise la base locale, cree les sorties vides du graphe/RAG, puis propose d'installer le modele Ollama optionnel.
+
+Demarrer l'application:
+
+```bat
+run_app_windows.cmd
+```
+
+Ouvrir:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-Details are documented in `docs/web_app.md`.
+### Installation Manuelle
 
-Approved imports are the only workflow that should add new PDFs to `data/raw/theses_pdf/`. The Import PDF screen can accept one PDF or several PDFs at once. Each uploaded PDF becomes a separate review draft, and each draft must be approved or discarded individually. Manual changes to the raw folder should still be avoided because they bypass duplicate checks, review, CSV export, and graph rebuilds.
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python scripts/setup_project.py --install-deps --install-playwright
+python scripts/run_web_app.py --port 8000
+```
 
-LLM suggestions are optional and local. They fill only the Review form and never update SQLite, CSV, or the graph until the user clicks `Approve`.
+Verifier l'installation:
 
-## Optional Local LLM Fallback
+```powershell
+python scripts/doctor.py
+```
 
-For documents marked `needs_review`, and for Import PDF review suggestions, the project can use a free local Ollama model.
+### Installation Optionnelle Du LLM Local
 
-Recommended model:
+Ollama est optionnel. L'application fonctionne sans Ollama; seules les suggestions LLM sont indisponibles.
+
+Script Windows:
+
+```bat
+setup_ollama_windows.cmd
+```
+
+Commande manuelle:
 
 ```powershell
 python scripts/setup_ollama.py --install --pull --model qwen2.5:7b
 ```
 
-Or manually:
+### Fonctionnalites De L'interface Web
 
-```powershell
-ollama pull qwen2.5:7b
-```
+L'interface contient:
 
-Ollama is not a Python package, so it is not installed through `requirements.txt`. On Windows, the project setup can install it with `winget` using the package ID `Ollama.Ollama`, then pull the model.
+- `Dashboard`: vue d'ensemble du jeu de donnees et du graphe;
+- `Thesis Search`: recherche, filtres, resultats pagines, profil de memoire;
+- `Concepts`: index des concepts et memoires connectes;
+- `Dataset`: table complete, copie CSV, telechargement CSV;
+- `Ask / RAG`: questions locales, sources citees, pagination de toutes les sources, profils des sources, liens PDF;
+- `Import PDF`: import d'un PDF ou de plusieurs PDF, verification des metadonnees, validation ou suppression des brouillons.
 
-Run local LLM review without applying changes:
+### Workflow D'import
 
-```powershell
-python scripts/llm_review_needs_review.py --model qwen2.5:7b
-```
+Les nouveaux PDF doivent etre ajoutes depuis l'interface web.
 
-Run and apply confident fixes:
+Workflow:
 
-```powershell
-python scripts/llm_review_needs_review.py --model qwen2.5:7b --apply
-python scripts/export_csv.py
-python scripts/export_quality_report.py
-```
+1. Ouvrir `Import PDF`.
+2. Selectionner un PDF ou plusieurs PDF.
+3. Le systeme place chaque fichier en staging et cree un brouillon de verification.
+4. Le systeme detecte les doublons avec le hash du PDF.
+5. L'utilisateur verifie le titre, l'annee, le niveau, le parcours, les mots-cles, les concepts, le cas d'usage, la methodologie et le resume.
+6. Optionnel: demander des suggestions a Ollama local.
+7. `Apply LLM suggestions` remplit seulement le formulaire.
+8. `Approve` insere le memoire dans SQLite.
+9. Le CSV, le graphe de connaissances et les embeddings RAG sont reconstruits ensemble.
+10. `Discard` supprime le brouillon sans modifier le jeu de donnees principal.
 
-The LLM is used only as a fallback. It should fill missing fields when supported by the text, not invent missing abstracts.
+### Modele De Donnees
 
-If a document does not contain an explicit abstract, the system can optionally generate a clearly marked abstract from the available introduction/conclusion text:
+Le projet stocke une ligne par memoire.
 
-```powershell
-python scripts/llm_generate_missing_abstracts.py --model qwen2.5:7b --apply
-```
-
-Generated abstracts are tagged in `extraction_notes` as `abstract_generated:<model>` so they are not confused with abstracts extracted from the original PDF.
-
-## Target CSV Fields
-
-The main extraction goal is to create `data/processed/theses.csv` with one row per thesis:
+Champs principaux:
 
 ```text
 thesis_id
 file_name
+pages_count
 year
 title
 master_level
@@ -237,133 +386,122 @@ keywords
 concepts
 use_case
 methodology
-confidence
+extraction_confidence
 needs_review
+extraction_notes
 ```
 
-`abstract` may be empty. Missing abstracts do not make a row `needs_review`.
+Le champ `abstract` est utile lorsqu'il existe, mais il n'est pas obligatoire car beaucoup de memoires n'ont pas de section resume comparable.
 
-## Scripts
+Normalisation du parcours:
 
-Initialize or reset the database:
+- `apprentissage` correspond au parcours en apprentissage;
+- tout memoire qui n'est pas en apprentissage est considere comme `classique`.
+
+### Graphe De Connaissances
+
+Le graphe est construit a partir des metadonnees validees.
+
+Types de noeuds:
+
+- `Thesis`
+- `Concept`
+- `Keyword`
+- `UseCase`
+- `Methodology`
+- `Year`
+- `MasterLevel`
+- `Track`
+
+Relations principales:
+
+- `Thesis -> HAS_CONCEPT -> Concept`
+- `Thesis -> HAS_KEYWORD -> Keyword`
+- `Thesis -> HAS_USE_CASE -> UseCase`
+- `Thesis -> USES_METHODOLOGY -> Methodology`
+- `Thesis -> SUBMITTED_IN -> Year`
+- `Thesis -> HAS_MASTER_LEVEL -> MasterLevel`
+- `Thesis -> HAS_TRACK -> Track`
+- `Thesis -> RELATED_TO -> Thesis`
+
+Les fichiers du graphe sont generes localement dans `data/graph/`.
+
+### RAG
+
+La premiere version RAG utilise les metadonnees, pas des chunks du PDF complet.
+
+Pour chaque memoire, le systeme construit un texte de recherche avec:
+
+- le titre;
+- les concepts;
+- les mots-cles;
+- le cas d'usage;
+- la methodologie;
+- le resume / l'introduction / la conclusion lorsqu'ils existent.
+
+L'application peut:
+
+- repondre avec la recherche locale;
+- utiliser Ollama de maniere optionnelle;
+- citer les memoires sources;
+- afficher toutes les sources classees avec 20 resultats par page;
+- ouvrir chaque source dans un profil integre a l'application;
+- ouvrir le PDF associe depuis le profil.
+
+### Politique Des Donnees
+
+Les PDF prives et les donnees locales generees ne sont pas envoyes sur GitHub.
+
+Ignores par Git:
+
+- `data/*`, sauf `data/README.md`;
+- `output/`;
+- `.env`;
+- `.venv/`;
+- caches et bytecode Python.
+
+Un clone propre demarre avec une base locale vide. Les PDF doivent etre ajoutes depuis l'interface.
+
+### Tests Et Validation
+
+Lancer tous les tests:
 
 ```powershell
-python scripts/init_db.py --reset
+python -m pytest
 ```
 
-Process all raw PDFs into SQLite:
-
-```powershell
-python scripts/process_pdfs.py --force
-```
-
-Run the full local pipeline with OCR, rule repair, manual verified overrides if present, and exports:
-
-```powershell
-python scripts/run_pipeline.py
-```
-
-Run the same pipeline with local Ollama review and generated abstracts:
-
-```powershell
-python scripts/run_pipeline.py --with-llm-review --generate-abstracts --model qwen2.5:7b
-```
-
-Export the final CSV:
-
-```powershell
-python scripts/export_csv.py
-```
-
-Validate that the dataset is ready for the next stage:
+Valider les donnees locales, le graphe et les embeddings:
 
 ```powershell
 python scripts/validate_dataset.py
-```
-
-Build the Knowledge Graph:
-
-```powershell
-python scripts/build_knowledge_graph.py
-```
-
-Validate the Knowledge Graph:
-
-```powershell
 python scripts/validate_knowledge_graph.py
+python scripts/validate_embeddings.py
 ```
 
-Query the Knowledge Graph:
+Lancer les benchmarks RAG:
 
 ```powershell
-python scripts/query_knowledge_graph.py summary
-python scripts/query_knowledge_graph.py similar thesis_0006 --limit 10
-python scripts/query_knowledge_graph.py search --concept "machine learning" --concept sante --match all
+python scripts/evaluate_rag_benchmark.py
+python scripts/evaluate_rag_comprehensive.py
 ```
 
-Run the local web app:
+### Commandes Importantes
 
 ```powershell
+python scripts/setup_project.py
 python scripts/run_web_app.py --port 8000
+python scripts/doctor.py
+python scripts/run_pipeline.py
+python scripts/build_knowledge_graph.py
+python scripts/build_embeddings.py
+python scripts/query_knowledge_graph.py summary
 ```
 
-Test only the first 5 PDFs:
+### Documentation
 
-```powershell
-python scripts/init_db.py --reset
-python scripts/process_pdfs.py --limit 5 --force
-python scripts/export_csv.py --output data/processed/theses_sample.csv
-```
-
-## Pipeline
-
-1. Read each PDF from `data/raw/theses_pdf/`.
-2. Extract cover text and scan the document in memory for useful sections.
-3. If an early page has no text layer but contains images, render it and run local OCR.
-4. Use rule-based extraction for stable fields:
-   - year
-   - title
-   - M1/M2
-   - apprentissage/classique
-   - abstract/introduction when headings are clear
-5. Use local NLP rules for keywords and concepts.
-6. Use rule-based classifiers for use case and methodology.
-7. Store one row per thesis in SQLite.
-8. Optionally run local LLM fallback on `needs_review` documents.
-9. Optionally generate clearly marked abstracts for theses that have no explicit abstract.
-10. Export `data/processed/theses.csv`.
-11. Write `data/reports/extraction_quality.csv`.
-12. Validate required fields and write:
-    - `data/reports/dataset_validation.csv`
-    - `data/reports/dataset_validation_summary.json`
-13. Build the local Knowledge Graph:
-    - SQLite tables: `graph_nodes`, `graph_edges`
-    - CSV files: `data/graph/nodes.csv`, `data/graph/edges.csv`
-    - JSON snapshot: `data/graph/knowledge_graph.json`
-14. Validate the Knowledge Graph.
-
-## Current Validation Target
-
-The dataset is considered ready for the graph/RAG stage when:
-
-- active database rows match the raw PDF count
-- required fields are complete: title, year, master level, track, keywords, concepts, use case, methodology
-- no active row is marked `needs_review`
-- exported CSV row count matches the database
-- suspicious title artifacts such as PDF backticks or encoding mojibake are absent
-
-Missing abstracts are reported separately but do not block validation.
-
-## Current Graph Validation Target
-
-The graph is considered ready for the first graph/RAG experiments when:
-
-- every active thesis has one `Thesis` node
-- every graph edge points to existing nodes
-- node IDs and edge IDs are unique
-- every thesis has required relations to year, master level, track, use case, methodology, concepts, and keywords
-- graph CSV row counts match SQLite graph tables
-
-## Important Rule
-
-Do not modify files in `data/raw/theses_pdf/` manually. Add new PDFs through the Import PDF workflow so duplicate checks, metadata review, database insert, CSV export, and graph rebuild happen together.
+- `docs/quickstart.md`
+- `docs/web_app.md`
+- `docs/knowledge_graph_schema.md`
+- `docs/knowledge_graph_queries.md`
+- `docs/rag.md`
+- `docs/github_release_checklist.md`

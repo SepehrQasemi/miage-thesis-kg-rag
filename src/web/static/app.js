@@ -10,6 +10,18 @@ const state = {
   llmSuggestions: null,
   datasetColumns: [],
   datasetRows: [],
+  ragBusy: false,
+  searchPage: 1,
+  searchPageSize: 20,
+  searchTotal: 0,
+  searchTotalPages: 0,
+  ragPage: 1,
+  ragPageSize: 20,
+  ragTotalPages: 0,
+  ragHasPrevious: false,
+  ragHasNext: false,
+  ragQuestion: "",
+  ragAllResults: false,
 };
 
 const viewTitles = {
@@ -17,6 +29,7 @@ const viewTitles = {
   search: ["Thesis Search", "Search and filter thesis metadata through graph relations."],
   concepts: ["Concepts", "Explore frequent concepts and their connected theses."],
   dataset: ["Dataset CSV", "View every extracted thesis row in one table."],
+  rag: ["Ask / RAG", "Ask questions over local thesis metadata and cited sources."],
   import: ["Import PDF", "Add a new thesis through extraction, review, and approval."],
 };
 
@@ -52,9 +65,27 @@ const api = {
 async function parseResponse(response) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.detail || `${response.status} ${response.statusText}`);
+    throw new Error(formatApiError(data.detail, `${response.status} ${response.statusText}`));
   }
   return data;
+}
+
+function formatApiError(detail, fallback) {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        const location = Array.isArray(item.loc) ? item.loc.join(".") : "";
+        return [location, item.msg].filter(Boolean).join(": ");
+      })
+      .filter(Boolean)
+      .join("; ") || fallback;
+  }
+  if (detail && typeof detail === "object") {
+    return detail.msg || JSON.stringify(detail);
+  }
+  return fallback;
 }
 
 function qs(selector) {
@@ -97,8 +128,11 @@ function bindNavigation() {
 
 function bindControls() {
   qs("#refresh-button").addEventListener("click", refreshAll);
-  qs("#search-button").addEventListener("click", runSearch);
+  qs("#search-button").addEventListener("click", () => runSearch({ page: 1 }));
   qs("#clear-button").addEventListener("click", clearSearch);
+  qs("#show-all-button").addEventListener("click", showAllSearchResults);
+  qs("#previous-page-button").addEventListener("click", () => runSearch({ page: state.searchPage - 1 }));
+  qs("#next-page-button").addEventListener("click", () => runSearch({ page: state.searchPage + 1 }));
   qs("#upload-form").addEventListener("submit", uploadImport);
   qs("#pdf-file").addEventListener("change", updateFileLabel);
   qs("#approve-import-button").addEventListener("click", approveCurrentImport);
@@ -106,8 +140,22 @@ function bindControls() {
   qs("#generate-llm-button").addEventListener("click", generateLlmSuggestions);
   qs("#apply-llm-button").addEventListener("click", applyLlmSuggestions);
   qs("#copy-csv-button").addEventListener("click", copyDatasetCsv);
+  qs("#rag-ask-button").addEventListener("click", askRag);
+  qs("#rag-show-all").addEventListener("change", syncRagControls);
+  qs("#rag-previous-page-button").addEventListener("click", () => loadRagSourcesPage(state.ragPage - 1));
+  qs("#rag-next-page-button").addEventListener("click", () => loadRagSourcesPage(state.ragPage + 1));
+  qs("#profile-close-button").addEventListener("click", closeThesisProfile);
+  qs("#profile-modal").addEventListener("click", (event) => {
+    if (event.target.id === "profile-modal") closeThesisProfile();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeThesisProfile();
+  });
   qs("#text-query").addEventListener("keydown", (event) => {
-    if (event.key === "Enter") runSearch();
+    if (event.key === "Enter") runSearch({ page: 1 });
+  });
+  qs("#rag-question").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) askRag();
   });
 }
 
@@ -125,7 +173,7 @@ function setView(view) {
 
 async function refreshAll() {
   await Promise.all([loadDashboard(), loadFacets(), loadDataset()]);
-  await runSearch();
+  await runSearch({ page: 1 });
   await loadConceptIndex();
 }
 
@@ -250,13 +298,276 @@ function renderDatasetCopyStatus(message, kind) {
   status.className = `status-banner ${kind || "muted"}-banner`;
 }
 
-async function runSearch() {
+async function askRag() {
+  const question = valueOf("#rag-question");
+  const topK = normalizedRagTopK();
+  const useLlm = qs("#rag-use-llm").checked;
+  const showAll = qs("#rag-show-all").checked;
+  if (!question) {
+    renderRagStatus("Enter a question first.", "warning");
+    return;
+  }
+  if (question.length < 2) {
+    renderRagStatus("Question must be at least 2 characters.", "warning");
+    return;
+  }
+  state.ragQuestion = question;
+  state.ragAllResults = showAll;
+  state.ragPage = 1;
+  setRagBusy(true);
+  renderRagStatus(
+    useLlm
+      ? "Retrieving sources and asking local Ollama..."
+      : showAll
+        ? "Retrieving answer and the first source page..."
+        : "Retrieving local thesis sources...",
+    "working",
+  );
+  try {
+    if (showAll) {
+      const [answer, sources] = await Promise.all([
+        api.postJson("/api/rag/answer", {
+          question,
+          top_k: Math.min(topK, 5),
+          use_llm: useLlm,
+        }),
+        api.postJson("/api/rag/search", {
+          question,
+          all_results: true,
+          page: 1,
+          page_size: state.ragPageSize,
+        }),
+      ]);
+      renderRagResult(answer, sources);
+      renderRagStatus(
+        `Retrieved ${formatNumber(sources.count || 0)} of ${formatNumber(sources.total || 0)} source theses.`,
+        answer.answer_mode === "ollama_unavailable" ? "warning" : "success",
+      );
+    } else {
+      const result = await api.postJson("/api/rag/answer", {
+        question,
+        top_k: topK,
+        use_llm: useLlm,
+      });
+      renderRagResult(result);
+      renderRagStatus(`Retrieved ${formatNumber(result.results?.length || 0)} source theses.`, result.answer_mode === "ollama_unavailable" ? "warning" : "success");
+    }
+  } catch (error) {
+    renderRagStatus(error.message, "error");
+  } finally {
+    setRagBusy(false);
+  }
+}
+
+function normalizedRagTopK() {
+  const input = qs("#rag-top-k");
+  const parsed = Number(input.value || 5);
+  const integer = Number.isFinite(parsed) ? Math.trunc(parsed) : 5;
+  const clamped = Math.min(20, Math.max(1, integer));
+  input.value = String(clamped);
+  return clamped;
+}
+
+async function loadRagSourcesPage(page) {
+  if (!state.ragQuestion || !state.ragAllResults) return;
+  const requestedPage = Math.max(1, Number.isFinite(Number(page)) ? Math.trunc(Number(page)) : 1);
+  setRagBusy(true);
+  renderRagStatus(`Loading source page ${formatNumber(requestedPage)}...`, "working");
+  try {
+    const result = await api.postJson("/api/rag/search", {
+      question: state.ragQuestion,
+      all_results: true,
+      page: requestedPage,
+      page_size: state.ragPageSize,
+    });
+    renderRagSources(result);
+    renderRagStatus(`Showing ${formatNumber(result.count || 0)} of ${formatNumber(result.total || 0)} source theses.`, "success");
+  } catch (error) {
+    renderRagStatus(error.message, "error");
+  } finally {
+    setRagBusy(false);
+  }
+}
+
+function renderRagResult(result, sourcePage = null) {
+  qs("#rag-meta").textContent = `${result.embedding_model || "local"} | ${result.embedding_dimensions || 0} dimensions`;
+  qs("#rag-answer-mode").textContent = result.answer_mode === "ollama" ? "Ollama" : "Local";
+  qs("#rag-answer").classList.remove("empty-state");
+  qs("#rag-answer").innerHTML = `
+    <p>${escapeHtml(result.answer || "No answer generated.")}</p>
+    ${result.llm_error ? `<p class="muted">${escapeHtml(result.llm_error)}</p>` : ""}
+  `;
+  renderRagSources(sourcePage || result);
+}
+
+function renderRagSources(result) {
+  const rows = result.results || [];
+  const total = result.total ?? rows.length;
+  const offset = result.offset || 0;
+  const first = total ? offset + 1 : 0;
+  const last = total ? offset + rows.length : 0;
+  qs("#rag-source-count").textContent = state.ragAllResults && total > rows.length
+    ? `${formatNumber(first)}-${formatNumber(last)} of ${formatNumber(total)} sources`
+    : `${formatNumber(rows.length)} sources`;
+  qs("#rag-results").innerHTML = rows.map(renderRagSource).join("") || '<div class="empty-state">No sources found.</div>';
+  qsa(".profile-button").forEach((button) => {
+    button.addEventListener("click", () => openThesisProfile(button.dataset.thesisId));
+  });
+  renderRagPagination(result);
+}
+
+function renderRagPagination(result) {
+  const pagination = qs("#rag-pagination");
+  const totalPages = result.total_pages || 0;
+  if (!state.ragAllResults || totalPages <= 1) {
+    state.ragTotalPages = 0;
+    state.ragHasPrevious = false;
+    state.ragHasNext = false;
+    pagination.classList.add("hidden");
+    qs("#rag-pagination-status").textContent = "";
+    qs("#rag-previous-page-button").disabled = true;
+    qs("#rag-next-page-button").disabled = true;
+    return;
+  }
+  state.ragPage = result.page || 1;
+  state.ragTotalPages = totalPages;
+  state.ragHasPrevious = Boolean(result.has_previous);
+  state.ragHasNext = Boolean(result.has_next);
+  pagination.classList.remove("hidden");
+  qs("#rag-pagination-status").textContent = `Page ${formatNumber(state.ragPage)} of ${formatNumber(totalPages)} | ${formatNumber(result.page_size || state.ragPageSize)} per page`;
+  qs("#rag-previous-page-button").disabled = !state.ragHasPrevious;
+  qs("#rag-next-page-button").disabled = !state.ragHasNext;
+}
+
+function renderRagSource(row) {
+  return `
+    <article class="rag-source-card">
+      <div class="rag-source-header">
+        <strong>${escapeHtml(row.thesis_id)} | ${escapeHtml(row.year)} | ${escapeHtml(row.master_level)} | ${escapeHtml(row.track)}</strong>
+        <span class="rag-score">${escapeHtml(Number(row.score || 0).toFixed(3))}</span>
+      </div>
+      <h4>${escapeHtml(row.title)}</h4>
+      <p>${escapeHtml(truncate(row.use_case, 120))}</p>
+      <div class="tag-cloud">${renderPlainTags(splitSemicolon(row.concepts).slice(0, 6), "accent")}</div>
+      <div class="rag-source-actions">
+        <button class="secondary-button compact-button profile-button" type="button" data-thesis-id="${escapeHtml(row.thesis_id)}">View profile</button>
+        <a class="pdf-link compact-link" href="${escapeHtml(row.pdf_url)}" target="_blank" rel="noreferrer">Open PDF</a>
+      </div>
+    </article>
+  `;
+}
+
+function splitSemicolon(value) {
+  return String(value || "")
+    .split(";")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function renderPlainTags(items, variant = "") {
+  return items.map((item) => `<span class="tag ${variant}">${escapeHtml(item)}</span>`).join("");
+}
+
+function renderRagStatus(message, kind) {
+  const status = qs("#rag-status");
+  status.textContent = message;
+  status.className = `status-banner ${kind || "muted"}-banner`;
+}
+
+function setRagBusy(isBusy) {
+  state.ragBusy = isBusy;
+  const showAll = qs("#rag-show-all").checked;
+  qs("#rag-ask-button").disabled = isBusy;
+  qs("#rag-question").disabled = isBusy;
+  qs("#rag-top-k").disabled = isBusy || showAll;
+  qs("#rag-use-llm").disabled = isBusy;
+  qs("#rag-show-all").disabled = isBusy;
+  if (isBusy) {
+    qs("#rag-previous-page-button").disabled = true;
+    qs("#rag-next-page-button").disabled = true;
+  } else {
+    const canPaginate = state.ragAllResults && state.ragTotalPages > 1;
+    qs("#rag-previous-page-button").disabled = !canPaginate || !state.ragHasPrevious;
+    qs("#rag-next-page-button").disabled = !canPaginate || !state.ragHasNext;
+  }
+}
+
+function syncRagControls() {
+  const showAll = qs("#rag-show-all").checked;
+  qs("#rag-top-k").disabled = showAll || state.ragBusy;
+  if (!showAll) {
+    state.ragAllResults = false;
+    renderRagPagination({ total_pages: 0 });
+  }
+}
+
+async function openThesisProfile(thesisId) {
+  const modal = qs("#profile-modal");
+  modal.classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  qs("#profile-title").textContent = "Thesis Profile";
+  qs("#profile-meta").textContent = thesisId;
+  qs("#profile-body").innerHTML = '<div class="empty-state">Loading profile...</div>';
+  try {
+    const detail = await api.get(`/api/theses/${encodeURIComponent(thesisId)}`);
+    renderThesisProfile(detail);
+  } catch (error) {
+    qs("#profile-body").innerHTML = `<div class="status-banner error-banner">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function closeThesisProfile() {
+  qs("#profile-modal").classList.add("hidden");
+  document.body.classList.remove("modal-open");
+}
+
+function renderThesisProfile(detail) {
+  qs("#profile-title").textContent = detail.title || "Thesis Profile";
+  qs("#profile-meta").textContent = [detail.thesis_id, detail.year, detail.master_level, detail.track].filter(Boolean).join(" | ");
+  const concepts = detail.graph?.concepts || [];
+  const keywords = detail.graph?.keywords || [];
+  const similar = detail.similar_theses || [];
+  qs("#profile-body").innerHTML = `
+    <div class="profile-meta-grid">
+      <div><span>Thesis ID</span><strong>${escapeHtml(detail.thesis_id)}</strong></div>
+      <div><span>Year</span><strong>${escapeHtml(detail.year || "N/A")}</strong></div>
+      <div><span>Level</span><strong>${escapeHtml(detail.master_level || "N/A")}</strong></div>
+      <div><span>Track</span><strong>${escapeHtml(detail.track || "N/A")}</strong></div>
+    </div>
+    <div class="detail-section">
+      <h4>Use case</h4>
+      <p>${escapeHtml(detail.use_case)}</p>
+    </div>
+    <div class="detail-section">
+      <h4>Methodology</h4>
+      <p>${escapeHtml(detail.methodology)}</p>
+    </div>
+    <div class="detail-section">
+      <h4>Concepts</h4>
+      <div class="tag-cloud">${renderTags(concepts.slice(0, 16), "accent")}</div>
+    </div>
+    <div class="detail-section">
+      <h4>Keywords</h4>
+      <div class="tag-cloud">${renderTags(keywords.slice(0, 18))}</div>
+    </div>
+    <div class="detail-section">
+      <h4>Similar theses</h4>
+      <div class="mini-list">
+        ${similar.map(renderSimilarRow).join("") || '<div class="muted">No related theses found.</div>'}
+      </div>
+    </div>
+    <a class="pdf-link" href="/api/files/${encodeURIComponent(detail.thesis_id)}" target="_blank" rel="noreferrer">Open PDF</a>
+  `;
+}
+
+async function runSearch({ page = state.searchPage } = {}) {
   const params = new URLSearchParams();
   const textQuery = qs("#text-query").value.trim();
   const concept = qs("#concept-filter").value;
   const year = qs("#year-filter").value;
   const level = qs("#level-filter").value;
   const track = qs("#track-filter").value;
+  const requestedPage = Math.max(1, Number.isFinite(Number(page)) ? Math.trunc(Number(page)) : 1);
 
   if (concept) params.append("concept", concept);
   if (year) params.set("year", year);
@@ -264,10 +575,15 @@ async function runSearch() {
   if (track) params.set("track", track);
   if (!concept && !year && !level && !track && textQuery) params.set("q", textQuery);
   params.set("match", "all");
-  params.set("limit", "100");
+  params.set("page", String(requestedPage));
+  params.set("page_size", String(state.searchPageSize));
 
-  const results = await api.get(`/api/theses?${params.toString()}`);
-  renderThesisTable(results);
+  const payload = await api.get(`/api/theses/page?${params.toString()}`);
+  state.searchPage = payload.page || requestedPage;
+  state.searchTotal = payload.total || 0;
+  state.searchTotalPages = payload.total_pages || 0;
+  renderThesisTable(payload.rows || []);
+  renderSearchPagination(payload);
 }
 
 function clearSearch() {
@@ -278,11 +594,24 @@ function clearSearch() {
   qs("#track-filter").value = "";
   state.selectedThesisId = null;
   qs("#detail-panel").innerHTML = '<div class="empty-state">Select a thesis to inspect its graph profile.</div>';
-  runSearch();
+  runSearch({ page: 1 });
+}
+
+function showAllSearchResults() {
+  qs("#text-query").value = "";
+  qs("#concept-filter").value = "";
+  qs("#year-filter").value = "";
+  qs("#level-filter").value = "";
+  qs("#track-filter").value = "";
+  state.selectedThesisId = null;
+  qs("#detail-panel").innerHTML = '<div class="empty-state">Select a thesis to inspect its graph profile.</div>';
+  runSearch({ page: 1 });
 }
 
 function renderThesisTable(rows) {
-  qs("#result-count").textContent = `${formatNumber(rows.length)} results`;
+  const first = state.searchTotal ? (state.searchPage - 1) * state.searchPageSize + 1 : 0;
+  const last = state.searchTotal ? Math.min(state.searchPage * state.searchPageSize, state.searchTotal) : 0;
+  qs("#result-count").textContent = `${formatNumber(state.searchTotal)} results | ${formatNumber(first)}-${formatNumber(last)} shown`;
   qs("#thesis-table").innerHTML = rows
     .map((row) => `
       <tr data-thesis-id="${escapeHtml(row.thesis_id)}" class="${row.thesis_id === state.selectedThesisId ? "selected" : ""}">
@@ -299,6 +628,16 @@ function renderThesisTable(rows) {
   qsa("#thesis-table tr").forEach((row) => {
     row.addEventListener("click", () => loadThesisDetail(row.dataset.thesisId));
   });
+}
+
+function renderSearchPagination(payload) {
+  const page = payload.page || 1;
+  const totalPages = payload.total_pages || 0;
+  qs("#pagination-status").textContent = totalPages
+    ? `Page ${formatNumber(page)} of ${formatNumber(totalPages)} | ${formatNumber(payload.page_size || state.searchPageSize)} per page`
+    : "No pages";
+  qs("#previous-page-button").disabled = !payload.has_previous;
+  qs("#next-page-button").disabled = !payload.has_next;
 }
 
 async function loadThesisDetail(thesisId) {
@@ -603,7 +942,7 @@ async function approveCurrentImport() {
     return;
   }
   const approvedIndex = state.selectedImportIndex;
-  renderImportStatus("Approving and rebuilding graph...", "working");
+    renderImportStatus("Approving and rebuilding graph/RAG outputs...", "working");
   setImportBusy(true);
   try {
     const result = await api.postJson(`/api/imports/${encodeURIComponent(state.currentDraft.draft_id)}/approve`, collectReviewFields());
@@ -613,9 +952,9 @@ async function approveCurrentImport() {
     renderBatchList();
     await refreshAll();
     if (selectNextPendingImport(approvedIndex, false)) {
-      renderImportStatus(`Approved ${result.thesis_id}. Next draft selected. Database, CSV, and graph are updated.`, "success");
+      renderImportStatus(`Approved ${result.thesis_id}. Next draft selected. Database, CSV, graph, and RAG are updated.`, "success");
     } else {
-      renderImportStatus(`Approved ${result.thesis_id}. Database, CSV, and graph are updated.`, "success");
+      renderImportStatus(`Approved ${result.thesis_id}. Database, CSV, graph, and RAG are updated.`, "success");
       renderReviewEmpty();
       qs("#pdf-file").value = "";
       updateFileLabel();

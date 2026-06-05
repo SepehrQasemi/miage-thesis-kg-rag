@@ -19,23 +19,21 @@
 
         <nav class="nav-list" aria-label="Primary">
           <button class="nav-item active" data-view="dashboard" type="button">
-            <span class="nav-icon" aria-hidden="true">D</span>
             Dashboard
           </button>
           <button class="nav-item" data-view="search" type="button">
-            <span class="nav-icon" aria-hidden="true">S</span>
             Thesis Search
           </button>
           <button class="nav-item" data-view="concepts" type="button">
-            <span class="nav-icon" aria-hidden="true">G</span>
             Concepts
           </button>
           <button class="nav-item" data-view="dataset" type="button">
-            <span class="nav-icon" aria-hidden="true">CSV</span>
             Dataset
           </button>
+          <button class="nav-item" data-view="rag" type="button">
+            Ask / RAG
+          </button>
           <button class="nav-item" data-view="import" type="button">
-            <span class="nav-icon" aria-hidden="true">+</span>
             Import PDF
           </button>
         </nav>
@@ -110,6 +108,7 @@
             </div>
             <button class="primary-button" id="search-button" type="button">Search</button>
             <button class="secondary-button" id="clear-button" type="button">Clear</button>
+            <button class="secondary-button" id="show-all-button" type="button">Show all results</button>
           </div>
 
           <div class="content-split">
@@ -132,6 +131,11 @@
                   </thead>
                   <tbody id="thesis-table"></tbody>
                 </table>
+              </div>
+              <div class="pagination-controls" id="search-pagination">
+                <button class="secondary-button" id="previous-page-button" type="button">Previous</button>
+                <span id="pagination-status" class="muted"></span>
+                <button class="secondary-button" id="next-page-button" type="button">Next</button>
               </div>
             </section>
 
@@ -176,6 +180,60 @@
               </table>
             </div>
           </section>
+        </section>
+
+        <section id="rag-view" class="view">
+          <section class="panel rag-panel">
+            <div class="panel-header">
+              <div>
+                <h3>Ask The Thesis Dataset</h3>
+                <span id="rag-meta" class="muted"></span>
+              </div>
+            </div>
+            <div class="rag-controls">
+              <label class="rag-question-label">
+                Question
+                <textarea id="rag-question" rows="3" placeholder="Which theses are related to fraud detection with machine learning?"></textarea>
+              </label>
+              <label>
+                Results
+                <input id="rag-top-k" type="number" min="1" max="20" value="5" />
+              </label>
+              <label class="checkbox-label">
+                <input id="rag-use-llm" type="checkbox" />
+                Use Ollama
+              </label>
+              <label class="checkbox-label">
+                <input id="rag-show-all" type="checkbox" />
+                Show all results
+              </label>
+              <button class="primary-button" id="rag-ask-button" type="button">Ask</button>
+            </div>
+            <div id="rag-status" class="status-banner muted-banner">Ready for local metadata search.</div>
+          </section>
+
+          <div class="rag-results-grid">
+            <section class="panel rag-answer-panel">
+              <div class="panel-header">
+                <h3>Answer</h3>
+                <span id="rag-answer-mode" class="muted"></span>
+              </div>
+              <div id="rag-answer" class="empty-state">Ask a question to retrieve thesis sources.</div>
+            </section>
+
+            <section class="panel rag-sources-panel">
+              <div class="panel-header">
+                <h3>Sources</h3>
+                <span id="rag-source-count" class="muted"></span>
+              </div>
+              <div id="rag-results" class="rag-results-list"></div>
+              <div class="pagination-controls rag-pagination hidden" id="rag-pagination">
+                <button class="secondary-button" id="rag-previous-page-button" type="button">Previous</button>
+                <span id="rag-pagination-status" class="muted"></span>
+                <button class="secondary-button" id="rag-next-page-button" type="button">Next</button>
+              </div>
+            </section>
+          </div>
         </section>
 
         <section id="import-view" class="view">
@@ -271,6 +329,21 @@
           </div>
         </section>
       </main>
+    </div>
+
+    <div id="profile-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="profile-title">
+      <div class="modal-panel">
+        <div class="modal-header">
+          <div>
+            <h3 id="profile-title">Thesis Profile</h3>
+            <span id="profile-meta" class="muted"></span>
+          </div>
+          <button class="icon-button" id="profile-close-button" type="button" aria-label="Close profile">X</button>
+        </div>
+        <div id="profile-body" class="profile-body">
+          <div class="empty-state">Loading profile...</div>
+        </div>
+      </div>
     </div>
 
     <script src="/static/app.js" type="module"></script>

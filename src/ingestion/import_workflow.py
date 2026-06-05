@@ -24,6 +24,7 @@ from extraction.field_extractor import (
 from extraction.pdf_reader import read_pdf_text
 from extraction.section_detector import extract_sections
 from nlp.keyword_extractor import extract_keywords_for_corpus, normalize_concepts
+from rag.embeddings import rebuild_embeddings
 
 
 ALLOWED_MASTER_LEVELS = {"M1", "M2", "N/A"}
@@ -278,6 +279,7 @@ def approve_import(
             conn.commit()
             document_inserted = True
         outputs = rebuild_graph_outputs(database)
+        embedding_outputs = rebuild_embeddings(database)
     except Exception:
         if document_inserted:
             with connect(database) as conn:
@@ -299,6 +301,7 @@ def approve_import(
         "file_name": final_file_name,
         "title": reviewed["title"],
         "outputs": outputs,
+        "embedding_outputs": embedding_outputs,
     }
 
 

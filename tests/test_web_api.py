@@ -138,6 +138,34 @@ def test_filtered_thesis_search_uses_graph_filters(tmp_path, monkeypatch):
     assert [row["thesis_id"] for row in response.json()] == ["thesis_0001"]
 
 
+def test_paginated_thesis_search_returns_total_and_page_size(tmp_path, monkeypatch):
+    client = client_for(tmp_path, monkeypatch)
+
+    response = client.get("/api/theses/page", params={"page": 1, "page_size": 1})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    assert data["page"] == 1
+    assert data["page_size"] == 1
+    assert data["total_pages"] == 2
+    assert data["has_next"] is True
+    assert len(data["rows"]) == 1
+
+    second_page = client.get("/api/theses/page", params={"page": 2, "page_size": 1}).json()
+    assert second_page["has_previous"] is True
+    assert second_page["has_next"] is False
+    assert len(second_page["rows"]) == 1
+
+
+def test_paginated_thesis_search_limits_page_size_to_twenty(tmp_path, monkeypatch):
+    client = client_for(tmp_path, monkeypatch)
+
+    response = client.get("/api/theses/page", params={"page_size": 21})
+
+    assert response.status_code == 422
+
+
 def test_dataset_endpoint_returns_complete_csv_rows(tmp_path, monkeypatch):
     client = client_for(tmp_path, monkeypatch)
 
@@ -161,6 +189,98 @@ def test_dataset_csv_download_returns_export_file(tmp_path, monkeypatch):
     body = response.content.decode("utf-8-sig")
     assert "thesis_id,file_name,pages_count,year,title" in body
     assert "thesis_0001" in body
+
+
+def test_rag_search_endpoint_returns_semantic_sources(tmp_path, monkeypatch):
+    client = client_for(tmp_path, monkeypatch)
+
+    response = client.post("/api/rag/search", json={"question": "health detection with machine learning", "top_k": 1})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] == 1
+    assert data["embedding_model"] == "local-hash-v1"
+    assert data["results"][0]["thesis_id"] == "thesis_0001"
+    assert data["results"][0]["pdf_url"] == "/api/files/thesis_0001"
+
+
+def test_rag_search_all_results_is_paginated_to_twenty_max(tmp_path, monkeypatch):
+    client = client_for(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/api/rag/search",
+        json={"question": "health detection", "all_results": True, "page": 1, "page_size": 1},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    assert data["count"] == 1
+    assert data["page"] == 1
+    assert data["page_size"] == 1
+    assert data["total_pages"] == 2
+    assert data["has_previous"] is False
+    assert data["has_next"] is True
+
+    second_page = client.post(
+        "/api/rag/search",
+        json={"question": "health detection", "all_results": True, "page": 2, "page_size": 1},
+    ).json()
+    assert second_page["count"] == 1
+    assert second_page["page"] == 2
+    assert second_page["has_previous"] is True
+    assert second_page["has_next"] is False
+
+
+def test_rag_search_all_results_rejects_page_size_above_twenty(tmp_path, monkeypatch):
+    client = client_for(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/api/rag/search",
+        json={"question": "health detection", "all_results": True, "page": 1, "page_size": 21},
+    )
+
+    assert response.status_code == 422
+
+
+def test_rag_answer_endpoint_uses_local_answer_by_default(tmp_path, monkeypatch):
+    client = client_for(tmp_path, monkeypatch)
+
+    response = client.post("/api/rag/answer", json={"question": "medical AI detection", "top_k": 2})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["answer_mode"] == "local"
+    assert "thesis_000" in data["answer"]
+    assert len(data["sources"]) == 2
+
+
+def test_rag_endpoint_rejects_invalid_user_input(tmp_path, monkeypatch):
+    client = client_for(tmp_path, monkeypatch)
+
+    response = client.post("/api/rag/search", json={"question": "a", "top_k": 0})
+
+    assert response.status_code == 422
+
+
+def test_rag_answer_falls_back_when_ollama_unavailable(tmp_path, monkeypatch):
+    client = client_for(tmp_path, monkeypatch)
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("Ollama offline")
+
+    monkeypatch.setattr("rag.service.ollama_answer", unavailable)
+
+    response = client.post(
+        "/api/rag/answer",
+        json={"question": "medical AI detection", "top_k": 1, "use_llm": True},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["answer_mode"] == "ollama_unavailable"
+    assert "Ollama offline" in data["llm_error"]
+    assert len(data["sources"]) == 1
 
 
 def test_import_upload_creates_review_draft(tmp_path, monkeypatch):
@@ -233,8 +353,10 @@ def test_import_approval_updates_database_csv_and_graph(tmp_path, monkeypatch):
     with connect(tmp_path / "web.sqlite") as conn:
         row = conn.execute("SELECT title FROM documents WHERE thesis_id = 'thesis_0003'").fetchone()
         node_count = conn.execute("SELECT COUNT(*) AS count FROM graph_nodes WHERE node_type = 'Thesis'").fetchone()
+        embedding_count = conn.execute("SELECT COUNT(*) AS count FROM document_embeddings").fetchone()
     assert row["title"] == "Cancer detection with machine learning"
     assert node_count["count"] == 3
+    assert embedding_count["count"] == 3
 
     duplicate = client.post(
         "/api/imports",

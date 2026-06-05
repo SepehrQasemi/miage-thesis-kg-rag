@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 
 import pytest
@@ -92,6 +93,30 @@ def sample_pdf_file(tmp_path: Path, file_name: str = "renewable_energy_predictio
     return pdf_path
 
 
+def fill_review_fields(
+    page,
+    *,
+    title: str,
+    year: str = "2026",
+    master_level: str = "M1",
+    track: str = "apprentissage",
+    keywords: str = "machine learning; prediction",
+    concepts: str = "machine learning; prediction",
+    use_case: str = "business analytics",
+    methodology: str = "comparaison experimentale",
+    abstract: str = "",
+) -> None:
+    page.locator("#review-title").fill(title)
+    page.locator("#review-year").fill(year)
+    page.locator("#review-master-level").select_option(master_level)
+    page.locator("#review-track").select_option(track)
+    page.locator("#review-keywords").fill(keywords)
+    page.locator("#review-concepts").fill(concepts)
+    page.locator("#review-use-case").fill(use_case)
+    page.locator("#review-methodology").fill(methodology)
+    page.locator("#review-abstract").fill(abstract)
+
+
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -171,6 +196,7 @@ def test_dashboard_renders_graph_metrics(page):
     assert page.locator("#metric-grid").get_by_text("Theses").is_visible()
     assert page.locator("#metric-grid").get_by_text("Concepts").is_visible()
     assert page.locator("#top-concepts").get_by_text("machine learning").is_visible()
+    assert page.locator(".nav-icon").count() == 0
 
 
 def test_search_filter_and_detail_panel(page):
@@ -183,6 +209,61 @@ def test_search_filter_and_detail_panel(page):
     expect(detail_panel.locator(".detail-title")).to_have_text("Cancer detection")
     expect(detail_panel.locator(".detail-section", has_text="Concepts").locator(".tag.accent", has_text="machine learning")).to_be_visible()
     expect(detail_panel.get_by_text("thesis_0002")).to_be_visible()
+
+
+def test_search_show_all_results_uses_twenty_row_pages(page):
+    rows = [
+        {
+            "thesis_id": f"thesis_{index:04d}",
+            "title": f"Paged thesis {index}",
+            "year": "2025",
+            "master_level": "M1",
+            "track": "apprentissage",
+            "use_case": "sante / aide au diagnostic",
+            "methodology": "comparaison experimentale",
+            "extraction_confidence": 1.0,
+        }
+        for index in range(1, 26)
+    ]
+
+    def paged_theses(route):
+        query = parse_qs(urlparse(route.request.url).query)
+        page_number = int(query.get("page", ["1"])[0])
+        page_size = int(query.get("page_size", ["20"])[0])
+        start = (page_number - 1) * page_size
+        page_rows = rows[start:start + page_size]
+        total_pages = (len(rows) + page_size - 1) // page_size
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "rows": page_rows,
+                    "total": len(rows),
+                    "page": page_number,
+                    "page_size": page_size,
+                    "total_pages": total_pages,
+                    "has_previous": page_number > 1,
+                    "has_next": page_number < total_pages,
+                }
+            ),
+        )
+
+    page.route("**/api/theses/page**", paged_theses)
+
+    page.get_by_role("button", name="Thesis Search").click()
+    page.get_by_role("button", name="Show all results").click()
+
+    expect(page.locator("#result-count")).to_contain_text("25 results | 1-20 shown")
+    expect(page.locator("#pagination-status")).to_contain_text("Page 1 of 2 | 20 per page")
+    expect(page.locator("#thesis-table tr")).to_have_count(20)
+
+    page.locator("#next-page-button").click()
+
+    expect(page.locator("#result-count")).to_contain_text("25 results | 21-25 shown")
+    expect(page.locator("#pagination-status")).to_contain_text("Page 2 of 2 | 20 per page")
+    expect(page.locator("#thesis-table tr")).to_have_count(5)
+    expect(page.locator("#thesis-table")).to_contain_text("thesis_0021")
 
 
 def test_concept_explorer_shows_connected_theses(page):
@@ -204,6 +285,223 @@ def test_dataset_view_shows_complete_csv_table(page):
     expect(page.locator("#dataset-body")).to_contain_text("thesis_0001")
     expect(page.locator("#dataset-body")).to_contain_text("Cancer detection")
     expect(page.locator("a.download-button")).to_have_attribute("href", "/api/dataset.csv")
+
+
+def test_rag_view_retrieves_answer_and_sources(page):
+    page.get_by_role("button", name="Ask / RAG").click()
+    page.locator("#rag-question").fill("health detection with machine learning")
+    page.locator("#rag-top-k").fill("2")
+    page.locator("#rag-ask-button").click()
+
+    expect(page.locator("#rag-status")).to_contain_text("Retrieved", timeout=15000)
+    expect(page.locator("#rag-answer")).to_contain_text("thesis_000")
+    expect(page.locator("#rag-results")).to_contain_text("Cancer detection")
+    expect(page.locator("#rag-source-count")).to_contain_text("2 sources")
+
+
+def test_rag_show_all_sources_paginates_twenty_at_a_time(page):
+    rows = [
+        {
+            "thesis_id": f"thesis_{index:04d}",
+            "title": f"RAG paged thesis {index}",
+            "year": "2025",
+            "master_level": "M1",
+            "track": "apprentissage" if index % 2 else "classique",
+            "concepts": "machine learning; detection; health",
+            "keywords": "machine learning; detection",
+            "use_case": "sante / aide au diagnostic",
+            "methodology": "comparaison experimentale",
+            "abstract": "",
+            "score": round(1 - (index / 1000), 4),
+            "matched_terms": ["detection"],
+            "pdf_url": f"/api/files/thesis_{index:04d}",
+        }
+        for index in range(1, 26)
+    ]
+
+    def rag_answer(route):
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "question": "show all health detection theses",
+                    "top_k": 5,
+                    "embedding_model": "local-hash-v1",
+                    "embedding_dimensions": 384,
+                    "count": 5,
+                    "total": len(rows),
+                    "offset": 0,
+                    "page": 1,
+                    "page_size": 5,
+                    "total_pages": 5,
+                    "has_previous": False,
+                    "has_next": True,
+                    "results": rows[:5],
+                    "answer": "Closest theses are thesis_0001, thesis_0002, thesis_0003, thesis_0004, thesis_0005.",
+                    "answer_mode": "local",
+                    "llm_error": "",
+                    "sources": rows[:5],
+                }
+            ),
+        )
+
+    def rag_search(route):
+        payload = json.loads(route.request.post_data or "{}")
+        page_number = int(payload.get("page", 1))
+        page_size = int(payload.get("page_size", 20))
+        start = (page_number - 1) * page_size
+        page_rows = rows[start:start + page_size]
+        total_pages = (len(rows) + page_size - 1) // page_size
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "question": payload.get("question", ""),
+                    "top_k": page_size,
+                    "embedding_model": "local-hash-v1",
+                    "embedding_dimensions": 384,
+                    "count": len(page_rows),
+                    "total": len(rows),
+                    "offset": start,
+                    "page": page_number,
+                    "page_size": page_size,
+                    "total_pages": total_pages,
+                    "has_previous": page_number > 1,
+                    "has_next": page_number < total_pages,
+                    "results": page_rows,
+                }
+            ),
+        )
+
+    page.route("**/api/rag/answer", rag_answer)
+    page.route("**/api/rag/search", rag_search)
+
+    page.get_by_role("button", name="Ask / RAG").click()
+    page.locator("#rag-question").fill("show all health detection theses")
+    page.locator("#rag-show-all").check()
+    expect(page.locator("#rag-top-k")).to_be_disabled()
+    page.locator("#rag-ask-button").click()
+
+    expect(page.locator("#rag-source-count")).to_contain_text("1-20 of 25 sources")
+    expect(page.locator("#rag-pagination-status")).to_contain_text("Page 1 of 2 | 20 per page")
+    expect(page.locator(".rag-source-card")).to_have_count(20)
+    expect(page.locator("#rag-results")).to_contain_text("thesis_0020")
+
+    page.locator("#rag-next-page-button").click()
+
+    expect(page.locator("#rag-source-count")).to_contain_text("21-25 of 25 sources")
+    expect(page.locator("#rag-pagination-status")).to_contain_text("Page 2 of 2 | 20 per page")
+    expect(page.locator(".rag-source-card")).to_have_count(5)
+    expect(page.locator("#rag-results")).to_contain_text("thesis_0021")
+    expect(page.locator("#rag-next-page-button")).to_be_disabled()
+
+
+def test_rag_source_profile_modal_opens_inside_app(page):
+    page.get_by_role("button", name="Ask / RAG").click()
+    page.locator("#rag-question").fill("health detection with machine learning")
+    page.locator("#rag-top-k").fill("3")
+    page.locator("#rag-ask-button").click()
+
+    profile_button = page.locator('.profile-button[data-thesis-id="thesis_0001"]')
+    expect(profile_button).to_be_visible(timeout=15000)
+    profile_button.click()
+
+    modal = page.locator("#profile-modal")
+    expect(modal).to_be_visible()
+    expect(modal.locator("#profile-title")).to_have_text("Cancer detection")
+    expect(modal.locator("#profile-meta")).to_contain_text("thesis_0001")
+    expect(modal.locator("#profile-body")).to_contain_text("Use case")
+    expect(modal.locator("#profile-body")).to_contain_text("Methodology")
+    expect(modal.locator("#profile-body")).to_contain_text("machine learning")
+    expect(modal.locator("a.pdf-link")).to_have_attribute("href", "/api/files/thesis_0001")
+
+    page.locator("#profile-close-button").click()
+    expect(modal).to_be_hidden()
+
+
+def test_rag_view_validates_empty_and_short_questions(page):
+    page.get_by_role("button", name="Ask / RAG").click()
+
+    page.locator("#rag-ask-button").click()
+    expect(page.locator("#rag-status")).to_contain_text("Enter a question first.")
+
+    page.locator("#rag-question").fill("a")
+    page.locator("#rag-ask-button").click()
+    expect(page.locator("#rag-status")).to_contain_text("Question must be at least 2 characters.")
+    expect(page.locator("#rag-answer")).to_contain_text("Ask a question to retrieve thesis sources.")
+
+
+def test_rag_view_clamps_result_count_inputs(page):
+    page.get_by_role("button", name="Ask / RAG").click()
+    page.locator("#rag-question").fill("health detection")
+
+    page.locator("#rag-top-k").fill("0")
+    page.locator("#rag-ask-button").click()
+    expect(page.locator("#rag-top-k")).to_have_value("1")
+    expect(page.locator("#rag-source-count")).to_contain_text("1 sources", timeout=15000)
+
+    page.locator("#rag-top-k").fill("999")
+    page.locator("#rag-ask-button").click()
+    expect(page.locator("#rag-top-k")).to_have_value("20")
+    expect(page.locator("#rag-source-count")).to_contain_text("3 sources", timeout=15000)
+
+
+def test_rag_view_handles_html_like_user_question(page):
+    page.get_by_role("button", name="Ask / RAG").click()
+    page.locator("#rag-question").fill("<script>alert('bad')</script> health detection")
+    page.locator("#rag-top-k").fill("2")
+    page.locator("#rag-ask-button").click()
+
+    expect(page.locator("#rag-status")).to_contain_text("Retrieved", timeout=15000)
+    expect(page.locator("#rag-results")).to_contain_text("Cancer detection")
+    assert page.locator("#rag-answer script").count() == 0
+    assert page.locator("#rag-results script").count() == 0
+
+
+def test_import_single_pdf_from_ui_updates_dataset_search_and_rag(page, tmp_path):
+    pdf_path = sample_pdf_file(tmp_path, "customer_analytics_segmentation.pdf")
+
+    page.get_by_role("button", name="Import PDF").click()
+    page.locator("#pdf-file").set_input_files(str(pdf_path))
+    expect(page.locator("#file-label")).to_contain_text("customer_analytics_segmentation.pdf")
+    page.locator("#process-upload-button").click()
+
+    expect(page.locator("#review-form")).to_be_visible(timeout=15000)
+    expect(page.locator("#batch-list")).to_contain_text("customer_analytics_segmentation.pdf")
+    expect(page.locator("#draft-meta")).to_contain_text("customer_analytics_segmentation.pdf")
+    thesis_id = page.locator("#review-thesis-id").input_value()
+    assert thesis_id.startswith("thesis_")
+
+    fill_review_fields(
+        page,
+        title="Customer analytics segmentation with machine learning",
+        keywords="machine learning; segmentation; client",
+        concepts="machine learning; segmentation; client",
+        use_case="analyse client / commerce",
+        methodology="comparaison experimentale",
+    )
+    page.locator("#approve-import-button").click()
+
+    expect(page.locator("#import-status")).to_contain_text(f"Approved {thesis_id}", timeout=30000)
+    expect(page.locator("#review-empty")).to_be_visible()
+    expect(page.locator("#file-label")).to_contain_text("Choose one or more PDF theses")
+
+    page.get_by_role("button", name="Thesis Search").click()
+    page.locator("#text-query").fill("segmentation")
+    page.locator("#search-button").click()
+    expect(page.locator(f'#thesis-table tr[data-thesis-id="{thesis_id}"]')).to_be_visible()
+
+    page.get_by_role("button", name="Dataset").click()
+    expect(page.locator("#dataset-body")).to_contain_text(thesis_id)
+    expect(page.locator("#dataset-body")).to_contain_text("Customer analytics segmentation")
+
+    page.get_by_role("button", name="Ask / RAG").click()
+    page.locator("#rag-question").fill("customer segmentation machine learning")
+    page.locator("#rag-top-k").fill("5")
+    page.locator("#rag-ask-button").click()
+    expect(page.locator("#rag-results")).to_contain_text(thesis_id, timeout=15000)
 
 
 def test_import_review_approval_workflow(page, tmp_path):
@@ -244,7 +542,8 @@ def test_import_review_approval_workflow(page, tmp_path):
     expect(page.locator("#review-form")).to_be_visible(timeout=15000)
     expect(page.locator("#batch-list")).to_contain_text("renewable_energy_prediction.pdf")
     expect(page.locator("#batch-list")).to_contain_text("student_services_chatbot.pdf")
-    expect(page.locator("#review-thesis-id")).to_have_value("thesis_0004")
+    first_id = page.locator("#review-thesis-id").input_value()
+    assert first_id.startswith("thesis_")
     page.locator("#generate-llm-button").click()
     expect(page.locator("#llm-suggestion-panel")).to_be_visible()
     expect(page.locator("#llm-suggestion-content")).to_contain_text("Renewable energy forecasting")
@@ -252,19 +551,42 @@ def test_import_review_approval_workflow(page, tmp_path):
     expect(page.locator("#review-title")).to_have_value("Renewable energy forecasting with machine learning")
     page.locator("#approve-import-button").click()
 
-    expect(page.locator("#import-status")).to_contain_text("Approved thesis_0004", timeout=30000)
-    expect(page.locator("#review-thesis-id")).to_have_value("thesis_0005")
+    expect(page.locator("#import-status")).to_contain_text(f"Approved {first_id}", timeout=30000)
+    expect(page.locator("#draft-meta")).to_contain_text("student_services_chatbot.pdf")
+    second_id = page.locator("#review-thesis-id").input_value()
+    assert second_id.startswith("thesis_")
+    assert second_id != first_id
+
+    fill_review_fields(
+        page,
+        title="Student services chatbot with NLP",
+        keywords="chatbot; NLP; student services",
+        concepts="chatbot; NLP; student services",
+        use_case="services etudiants",
+        methodology="prototype applicatif",
+    )
+    page.locator("#approve-import-button").click()
+
+    expect(page.locator("#import-status")).to_contain_text(f"Approved {second_id}", timeout=30000)
+    expect(page.locator("#review-empty")).to_be_visible()
     page.get_by_role("button", name="Thesis Search").click()
     page.locator("#text-query").fill("forecasting")
     page.locator("#search-button").click()
-    expect(page.locator('#thesis-table tr[data-thesis-id="thesis_0004"]')).to_be_visible()
+    expect(page.locator(f'#thesis-table tr[data-thesis-id="{first_id}"]')).to_be_visible()
+
+    page.locator("#text-query").fill("chatbot")
+    page.locator("#search-button").click()
+    expect(page.locator(f'#thesis-table tr[data-thesis-id="{second_id}"]')).to_be_visible()
 
 
-def test_responsive_views_have_no_horizontal_overflow(page):
-    view_buttons = ["Dashboard", "Thesis Search", "Concepts", "Dataset", "Import PDF"]
+def test_responsive_views_use_mobile_and_tablet_layouts(page):
+    view_buttons = ["Dashboard", "Thesis Search", "Concepts", "Dataset", "Ask / RAG", "Import PDF"]
     viewports = [
+        {"width": 320, "height": 720},
+        {"width": 360, "height": 760},
         {"width": 390, "height": 800},
         {"width": 768, "height": 900},
+        {"width": 1024, "height": 900},
         {"width": 1440, "height": 900},
     ]
     for viewport in viewports:
@@ -273,10 +595,110 @@ def test_responsive_views_have_no_horizontal_overflow(page):
             page.get_by_role("button", name=button_name).click()
             metrics = page.evaluate(
                 """
-                () => ({
-                    innerWidth: globalThis.innerWidth,
-                    scrollWidth: document.documentElement.scrollWidth
-                })
-                """
+                (buttonName) => {
+                    const nav = document.querySelector(".nav-list");
+                    const navButton = document.querySelector(".nav-item");
+                    const activeView = document.querySelector(".view.active");
+                    const activeRect = activeView.getBoundingClientRect();
+                    const mainRect = document.querySelector(".main").getBoundingClientRect();
+                    const toolbar = document.querySelector("#search-view.active .toolbar");
+                    const ragControls = document.querySelector("#rag-view.active .rag-controls");
+                    const metricGrid = document.querySelector("#dashboard-view.active .metric-grid");
+                    const pagination = document.querySelector(".view.active .pagination-controls");
+
+                    function columnCount(element) {
+                        if (!element) return 0;
+                        const columns = getComputedStyle(element).gridTemplateColumns;
+                        if (!columns || columns === "none") return 0;
+                        return columns.split(" ").filter(Boolean).length;
+                    }
+
+                    return {
+                        buttonName,
+                        innerWidth: globalThis.innerWidth,
+                        scrollWidth: document.documentElement.scrollWidth,
+                        bodyScrollWidth: document.body.scrollWidth,
+                        activeLeft: activeRect.left,
+                        activeRight: activeRect.right,
+                        mainLeft: mainRect.left,
+                        mainRight: mainRect.right,
+                        navDisplay: getComputedStyle(nav).display,
+                        navOverflowX: getComputedStyle(nav).overflowX,
+                        navButtonHeight: navButton.getBoundingClientRect().height,
+                        toolbarColumns: columnCount(toolbar),
+                        ragColumns: columnCount(ragControls),
+                        metricColumns: columnCount(metricGrid),
+                        paginationWraps: pagination ? getComputedStyle(pagination).flexWrap : "",
+                    };
+                }
+                """,
+                button_name,
             )
             assert metrics["scrollWidth"] <= metrics["innerWidth"] + 1
+            assert metrics["bodyScrollWidth"] <= metrics["innerWidth"] + 1
+            assert metrics["activeLeft"] >= -1
+            assert metrics["activeRight"] <= metrics["innerWidth"] + 1
+            assert metrics["mainLeft"] >= -1
+            assert metrics["mainRight"] <= metrics["innerWidth"] + 1
+
+            if viewport["width"] <= 680:
+                assert metrics["navDisplay"] == "flex"
+                assert metrics["navOverflowX"] in {"auto", "scroll"}
+                assert metrics["navButtonHeight"] >= 44
+                assert metrics["paginationWraps"] in {"wrap", ""}
+                if button_name == "Dashboard":
+                    assert metrics["metricColumns"] == 1
+                if button_name == "Thesis Search":
+                    assert metrics["toolbarColumns"] == 1
+                if button_name == "Ask / RAG":
+                    assert metrics["ragColumns"] == 1
+            elif viewport["width"] <= 1100:
+                assert metrics["navDisplay"] == "grid"
+                assert metrics["navButtonHeight"] >= 42
+                if button_name == "Dashboard":
+                    assert metrics["metricColumns"] == 2
+                if button_name == "Thesis Search":
+                    assert metrics["toolbarColumns"] == 2
+                if button_name == "Ask / RAG":
+                    assert metrics["ragColumns"] == 2
+
+
+def test_mobile_rag_profile_modal_fits_viewport(page):
+    page.set_viewport_size({"width": 320, "height": 720})
+    page.get_by_role("button", name="Ask / RAG").click()
+    page.locator("#rag-question").fill("health detection with machine learning")
+    page.locator("#rag-top-k").fill("3")
+    page.locator("#rag-ask-button").click()
+
+    profile_button = page.locator('.profile-button[data-thesis-id="thesis_0001"]')
+    expect(profile_button).to_be_visible(timeout=15000)
+    profile_button.click()
+    modal = page.locator("#profile-modal")
+    expect(modal).to_be_visible()
+
+    metrics = page.evaluate(
+        """
+        () => {
+            const panel = document.querySelector(".modal-panel").getBoundingClientRect();
+            const close = document.querySelector("#profile-close-button").getBoundingClientRect();
+            return {
+                innerWidth: globalThis.innerWidth,
+                innerHeight: globalThis.innerHeight,
+                scrollWidth: document.documentElement.scrollWidth,
+                panelLeft: panel.left,
+                panelRight: panel.right,
+                panelTop: panel.top,
+                panelBottom: panel.bottom,
+                closeHeight: close.height,
+                bodyModalOpen: document.body.classList.contains("modal-open"),
+            };
+        }
+        """
+    )
+    assert metrics["scrollWidth"] <= metrics["innerWidth"] + 1
+    assert metrics["panelLeft"] >= -1
+    assert metrics["panelRight"] <= metrics["innerWidth"] + 1
+    assert metrics["panelTop"] >= -1
+    assert metrics["panelBottom"] <= metrics["innerHeight"] + 1
+    assert metrics["closeHeight"] >= 44
+    assert metrics["bodyModalOpen"] is True

@@ -47,7 +47,7 @@ The setup script:
 - creates the local data folders;
 - creates `.env` from `.env.example` when missing;
 - initializes `data/app.sqlite`;
-- creates empty graph and CSV outputs so the UI can start immediately.
+- creates empty graph, CSV, and RAG embedding outputs so the UI can start immediately.
 
 ## 3. Start The App
 
@@ -80,7 +80,7 @@ Preferred workflow:
 5. Apply suggestions only if they look correct.
 6. Click `Approve`.
 
-Approve updates the SQLite database, CSV export, and Knowledge Graph together.
+Approve updates the SQLite database, CSV export, Knowledge Graph, and RAG embeddings together.
 
 Alternative batch workflow:
 
@@ -101,7 +101,7 @@ python scripts/doctor.py
 python -m pytest
 ```
 
-`doctor.py` checks Python, dependencies, database, graph outputs, raw PDFs, and optional Ollama availability.
+`doctor.py` checks Python, dependencies, database, graph outputs, RAG embeddings, raw PDFs, and optional Ollama availability.
 
 ## 6. Common Problems
 

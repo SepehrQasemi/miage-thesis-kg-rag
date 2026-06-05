@@ -71,6 +71,20 @@ CREATE INDEX IF NOT EXISTS idx_graph_nodes_slug ON graph_nodes(slug);
 CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_graph_edges_type ON graph_edges(edge_type);
+
+CREATE TABLE IF NOT EXISTS document_embeddings (
+    thesis_id TEXT PRIMARY KEY,
+    embedding_model TEXT NOT NULL,
+    embedding_dimensions INTEGER NOT NULL,
+    embedding_text TEXT NOT NULL,
+    embedding_vector_json TEXT NOT NULL,
+    embedding_hash TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(thesis_id) REFERENCES documents(thesis_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_embeddings_model ON document_embeddings(embedding_model);
 """
 
 

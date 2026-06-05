@@ -21,12 +21,14 @@ from ingestion.import_workflow import (
     load_public_draft,
 )
 from llm.import_review import LLMUnavailableError, generate_import_suggestions
+from rag.service import RagService
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-app = FastAPI(title="MIAGE Thesis Knowledge Graph", version="0.1.0")
+app = FastAPI(title="MIAGE Thesis Knowledge Graph", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+_RAG_SERVICES: dict[Path, RagService] = {}
 
 
 class ImportApproval(BaseModel):
@@ -47,6 +49,16 @@ class LLMSuggestionRequest(BaseModel):
     model: str | None = None
 
 
+class RagRequest(BaseModel):
+    question: str = Field(min_length=2)
+    top_k: int = Field(default=5, ge=1, le=20)
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=20)
+    all_results: bool = False
+    use_llm: bool = False
+    model: str | None = None
+
+
 def database_path() -> Path:
     db_override = os.environ.get("MIAGE_APP_DB")
     return Path(db_override) if db_override else db_path()
@@ -54,6 +66,15 @@ def database_path() -> Path:
 
 def service() -> GraphQueryService:
     return GraphQueryService(database_path())
+
+
+def rag_service() -> RagService:
+    path = database_path()
+    service_instance = _RAG_SERVICES.get(path)
+    if service_instance is None:
+        service_instance = RagService(path)
+        _RAG_SERVICES[path] = service_instance
+    return service_instance
 
 
 @app.get("/")
@@ -96,6 +117,33 @@ def dataset_csv() -> FileResponse:
     return FileResponse(csv_path, media_type="text/csv", filename="miage_theses.csv")
 
 
+@app.post("/api/rag/search")
+def rag_search(request: RagRequest) -> dict:
+    try:
+        if request.all_results:
+            return rag_service().search(
+                request.question,
+                top_k=request.page_size,
+                offset=(request.page - 1) * request.page_size,
+            )
+        return rag_service().search(request.question, top_k=request.top_k)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/rag/answer")
+def rag_answer(request: RagRequest) -> dict:
+    try:
+        return rag_service().answer(
+            request.question,
+            top_k=request.top_k,
+            use_llm=request.use_llm,
+            model=request.model,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/top/{node_type}")
 def top_nodes(node_type: str, limit: Annotated[int, Query(ge=1, le=100)] = 20) -> list[dict]:
     validate_node_type(node_type)
@@ -130,6 +178,61 @@ def theses(
             limit=limit,
         )
     return graph_service.list_theses(query=q, limit=limit)
+
+
+@app.get("/api/theses/page")
+def theses_page(
+    q: str | None = None,
+    concept: Annotated[list[str] | None, Query()] = None,
+    keyword: Annotated[list[str] | None, Query()] = None,
+    use_case: str | None = None,
+    methodology: str | None = None,
+    year: str | None = None,
+    master_level: str | None = None,
+    track: str | None = None,
+    match: str = "all",
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=20)] = 20,
+) -> dict:
+    graph_service = service()
+    offset = (page - 1) * page_size
+    has_graph_filters = any([concept, keyword, use_case, methodology, year, master_level, track])
+    if has_graph_filters:
+        total = graph_service.count_search_theses(
+            concepts=concept or [],
+            keywords=keyword or [],
+            use_case=use_case,
+            methodology=methodology,
+            year=year,
+            master_level=master_level,
+            track=track,
+            match=match,
+        )
+        rows = graph_service.search_theses(
+            concepts=concept or [],
+            keywords=keyword or [],
+            use_case=use_case,
+            methodology=methodology,
+            year=year,
+            master_level=master_level,
+            track=track,
+            match=match,
+            limit=page_size,
+            offset=offset,
+        )
+    else:
+        total = graph_service.count_theses(query=q)
+        rows = graph_service.list_theses(query=q, limit=page_size, offset=offset)
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    return {
+        "rows": rows,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "has_previous": page > 1 and total_pages > 0,
+        "has_next": page < total_pages,
+    }
 
 
 @app.get("/api/theses/{thesis_id}")

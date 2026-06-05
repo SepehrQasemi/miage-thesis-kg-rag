@@ -58,6 +58,8 @@ def main() -> None:
 
     run_step([sys.executable, "scripts/build_knowledge_graph.py"])
     run_step([sys.executable, "scripts/validate_knowledge_graph.py"])
+    run_step([sys.executable, "scripts/build_embeddings.py"])
+    run_step([sys.executable, "scripts/validate_embeddings.py"])
 
 
 if __name__ == "__main__":

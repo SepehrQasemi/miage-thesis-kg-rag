@@ -79,7 +79,7 @@ class GraphQueryService:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def list_theses(self, query: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    def list_theses(self, query: str | None = None, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         search_text = f"%{query.strip()}%" if query and query.strip() else None
         where_clause = "WHERE status = 'active'"
         params: list[Any] = []
@@ -94,7 +94,7 @@ class GraphQueryService:
                 )
             """
             params.extend([search_text] * 5)
-        params.append(limit)
+        params.extend([limit, offset])
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
@@ -105,11 +105,33 @@ class GraphQueryService:
                 ORDER BY
                     CASE WHEN year = 'N/A' THEN 0 ELSE CAST(year AS INTEGER) END DESC,
                     thesis_id ASC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
                 params,
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def count_theses(self, query: str | None = None) -> int:
+        search_text = f"%{query.strip()}%" if query and query.strip() else None
+        where_clause = "WHERE status = 'active'"
+        params: list[Any] = []
+        if search_text:
+            where_clause += """
+                AND (
+                    title LIKE ?
+                    OR concepts LIKE ?
+                    OR keywords LIKE ?
+                    OR use_case LIKE ?
+                    OR methodology LIKE ?
+                )
+            """
+            params.extend([search_text] * 5)
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM documents {where_clause}",
+                params,
+            ).fetchone()
+        return int(row["count"])
 
     def facets(self) -> dict[str, list[dict[str, Any]]]:
         return {
@@ -255,22 +277,9 @@ class GraphQueryService:
         track: str | None = None,
         match: str = "all",
         limit: int = 20,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
-        filters: list[tuple[str, str, str]] = []
-        for concept in concepts or []:
-            filters.append(("HAS_CONCEPT", entity_node_id("Concept", concept), concept))
-        for keyword in keywords or []:
-            filters.append(("HAS_KEYWORD", entity_node_id("Keyword", keyword), keyword))
-        if use_case:
-            filters.append(("HAS_USE_CASE", entity_node_id("UseCase", use_case), use_case))
-        if methodology:
-            filters.append(("USES_METHODOLOGY", entity_node_id("Methodology", methodology), methodology))
-        if year:
-            filters.append(("SUBMITTED_IN", entity_node_id("Year", year), year))
-        if master_level:
-            filters.append(("HAS_MASTER_LEVEL", entity_node_id("MasterLevel", master_level), master_level))
-        if track:
-            filters.append(("HAS_TRACK", entity_node_id("Track", track), track))
+        filters = build_search_filters(concepts, keywords, use_case, methodology, year, master_level, track)
         if not filters:
             return []
 
@@ -280,7 +289,7 @@ class GraphQueryService:
             params.extend([edge_type, target_id])
 
         required_count = len(filters) if match.lower() == "all" else 1
-        params.extend([required_count, limit])
+        params.extend([required_count, limit, offset])
 
         with self._connect() as conn:
             rows = conn.execute(
@@ -300,12 +309,53 @@ class GraphQueryService:
                     score DESC,
                     CASE WHEN d.year = 'N/A' THEN 0 ELSE CAST(d.year AS INTEGER) END DESC,
                     d.thesis_id ASC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
                 params,
             ).fetchall()
 
         return [dict(row) for row in rows]
+
+    def count_search_theses(
+        self,
+        concepts: Iterable[str] | None = None,
+        keywords: Iterable[str] | None = None,
+        use_case: str | None = None,
+        methodology: str | None = None,
+        year: str | None = None,
+        master_level: str | None = None,
+        track: str | None = None,
+        match: str = "all",
+    ) -> int:
+        filters = build_search_filters(concepts, keywords, use_case, methodology, year, master_level, track)
+        if not filters:
+            return 0
+
+        conditions = " OR ".join("(e.edge_type = ? AND e.target_id = ?)" for _ in filters)
+        params: list[Any] = []
+        for edge_type, target_id, _ in filters:
+            params.extend([edge_type, target_id])
+        required_count = len(filters) if match.lower() == "all" else 1
+        params.append(required_count)
+
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS count
+                FROM (
+                    SELECT d.thesis_id,
+                           COUNT(DISTINCT e.edge_type || ':' || e.target_id) AS matched_filters
+                    FROM graph_edges e
+                    JOIN graph_nodes n ON n.node_id = e.source_id AND n.node_type = 'Thesis'
+                    JOIN documents d ON d.thesis_id = REPLACE(n.node_id, 'thesis:', '')
+                    WHERE {conditions}
+                    GROUP BY d.thesis_id
+                    HAVING matched_filters >= ?
+                ) matched
+                """,
+                params,
+            ).fetchone()
+        return int(row["count"])
 
     def concept_overview(self, concept: str, limit: int = 10) -> dict[str, Any]:
         concept_node_id = entity_node_id("Concept", concept)
@@ -355,6 +405,33 @@ def normalize_thesis_node_id(thesis_id: str) -> str:
 def entity_node_id(node_type: str, label: str) -> str:
     canonical = canonical_entity_label(label, node_type)
     return f"{node_type.lower()}:{slugify(canonical)}"
+
+
+def build_search_filters(
+    concepts: Iterable[str] | None = None,
+    keywords: Iterable[str] | None = None,
+    use_case: str | None = None,
+    methodology: str | None = None,
+    year: str | None = None,
+    master_level: str | None = None,
+    track: str | None = None,
+) -> list[tuple[str, str, str]]:
+    filters: list[tuple[str, str, str]] = []
+    for concept in concepts or []:
+        filters.append(("HAS_CONCEPT", entity_node_id("Concept", concept), concept))
+    for keyword in keywords or []:
+        filters.append(("HAS_KEYWORD", entity_node_id("Keyword", keyword), keyword))
+    if use_case:
+        filters.append(("HAS_USE_CASE", entity_node_id("UseCase", use_case), use_case))
+    if methodology:
+        filters.append(("USES_METHODOLOGY", entity_node_id("Methodology", methodology), methodology))
+    if year:
+        filters.append(("SUBMITTED_IN", entity_node_id("Year", year), year))
+    if master_level:
+        filters.append(("HAS_MASTER_LEVEL", entity_node_id("MasterLevel", master_level), master_level))
+    if track:
+        filters.append(("HAS_TRACK", entity_node_id("Track", track), track))
+    return filters
 
 
 def edge_type_for_node_type(node_type: str) -> str:

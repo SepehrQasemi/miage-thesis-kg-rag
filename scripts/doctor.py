@@ -72,13 +72,16 @@ def check_database() -> bool:
                 row[0]
                 for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
             }
-            required = {"documents", "graph_nodes", "graph_edges"}
+            required = {"documents", "graph_nodes", "graph_edges", "document_embeddings"}
             missing = required - tables
             if missing:
                 fail(f"Database schema missing tables: {', '.join(sorted(missing))}")
                 return False
             doc_count = conn.execute("SELECT COUNT(*) FROM documents WHERE status = 'active'").fetchone()[0]
-        ok(f"Database schema ready; active documents: {doc_count}")
+            embedding_count = conn.execute("SELECT COUNT(*) FROM document_embeddings").fetchone()[0]
+        ok(f"Database schema ready; active documents: {doc_count}; embeddings: {embedding_count}")
+        if doc_count and embedding_count != doc_count:
+            warn("Embedding count does not match active documents. Run: python scripts/build_embeddings.py")
         return True
     except sqlite3.Error as exc:
         fail(f"Database error: {exc}")

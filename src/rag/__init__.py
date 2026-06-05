@@ -1,1 +1,1 @@
-"""RAG indexing and question-answering utilities."""
+"""Local RAG utilities for MIAGE thesis metadata."""
