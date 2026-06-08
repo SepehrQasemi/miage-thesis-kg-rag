@@ -9,6 +9,7 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+AGENTS.md
 
 # Local runtime artifacts. The setup script recreates these folders and
 # initializes an empty database/graph for fresh clones.

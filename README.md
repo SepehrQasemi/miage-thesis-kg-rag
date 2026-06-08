@@ -250,7 +250,6 @@ python scripts/query_knowledge_graph.py summary
 - `docs/knowledge_graph_schema.md`
 - `docs/knowledge_graph_queries.md`
 - `docs/rag.md`
-- `docs/github_release_checklist.md`
 
 ---
 
@@ -504,4 +503,3 @@ python scripts/query_knowledge_graph.py summary
 - `docs/knowledge_graph_schema.md`
 - `docs/knowledge_graph_queries.md`
 - `docs/rag.md`
-- `docs/github_release_checklist.md`
