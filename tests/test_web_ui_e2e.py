@@ -297,6 +297,7 @@ def test_rag_view_retrieves_answer_and_sources(page):
     expect(page.locator("#rag-answer")).to_contain_text("thesis_000")
     expect(page.locator("#rag-results")).to_contain_text("Cancer detection")
     expect(page.locator("#rag-source-count")).to_contain_text("2 sources")
+    expect(page.locator(".rag-score")).to_have_count(0)
 
 
 def test_rag_show_all_sources_paginates_twenty_at_a_time(page):

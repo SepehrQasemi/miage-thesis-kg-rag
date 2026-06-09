@@ -665,12 +665,6 @@ tbody tr.selected {
   overflow-wrap: anywhere;
 }
 
-.rag-score {
-  flex: 0 0 auto;
-  color: var(--accent);
-  font-weight: 850;
-}
-
 .rag-source-card h4 {
   margin: 8px 0 6px;
   font-size: 15px;

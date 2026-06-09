@@ -449,7 +449,6 @@ function renderRagSource(row) {
     <article class="rag-source-card">
       <div class="rag-source-header">
         <strong>${escapeHtml(row.thesis_id)} | ${escapeHtml(row.year)} | ${escapeHtml(row.master_level)} | ${escapeHtml(row.track)}</strong>
-        <span class="rag-score">${escapeHtml(Number(row.score || 0).toFixed(3))}</span>
       </div>
       <h4>${escapeHtml(row.title)}</h4>
       <p>${escapeHtml(truncate(row.use_case, 120))}</p>
