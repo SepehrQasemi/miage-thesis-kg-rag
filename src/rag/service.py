@@ -116,6 +116,49 @@ BROAD_DOMAIN_TOKENS = {
     "systems",
 }
 
+DOMAIN_PROFILES = {
+    "medical": {
+        "query_terms": [
+            "medical",
+            "medicine",
+            "health",
+            "healthcare",
+            "sante",
+            "diagnostic",
+            "patient",
+            "patients",
+            "hospital",
+            "hopital",
+            "clinique",
+            "cancer",
+            "mammography",
+            "mammographie",
+            "diabetes",
+            "diabete",
+            "alzheimer",
+        ],
+        "row_terms": [
+            "sante",
+            "medical",
+            "medicale",
+            "diagnostic",
+            "diagnostique",
+            "patient",
+            "patients",
+            "hopital",
+            "clinique",
+            "soin",
+            "soins",
+            "cancer",
+            "cancer du sein",
+            "mammographie",
+            "imagerie medicale",
+            "diabete",
+            "alzheimer",
+        ],
+    },
+}
+
 
 def dot(left: list[float], right: list[float]) -> float:
     return sum(a * b for a, b in zip(left, right))
@@ -198,6 +241,36 @@ def question_profile(question: str) -> dict[str, Any]:
     }
 
 
+def domain_terms_match(terms: list[str], normalized: str, tokens: set[str]) -> bool:
+    for term in terms:
+        term_norm = normalize_text(term)
+        if not term_norm:
+            continue
+        term_tokens = meaningful_tokens(term_norm)
+        if term_norm in normalized:
+            return True
+        if term_tokens and term_tokens.issubset(tokens):
+            return True
+    return False
+
+
+def active_domain_filters(profile: dict[str, Any]) -> list[str]:
+    domains = []
+    for domain, spec in DOMAIN_PROFILES.items():
+        if domain_terms_match(spec["query_terms"], profile["normalized"], profile["tokens"]):
+            domains.append(domain)
+    return domains
+
+
+def matching_row_domains(row_profile: dict[str, Any], domains: list[str]) -> list[str]:
+    matches = []
+    for domain in domains:
+        spec = DOMAIN_PROFILES[domain]
+        if domain_terms_match(spec["row_terms"], row_profile["domain_norm"], row_profile["domain_tokens"]):
+            matches.append(domain)
+    return matches
+
+
 def phrase_matches(clue: str, clue_tokens: set[str], field_norm: str, field_tokens: set[str]) -> bool:
     if not clue_tokens:
         return False
@@ -247,6 +320,11 @@ def row_search_profile(row: dict[str, Any]) -> dict[str, Any]:
 
     title_norm = normalize_text(row.get("title"))
     use_case_norm = normalize_text(row.get("use_case"))
+    domain_text = " ".join(
+        str(row.get(field) or "")
+        for field in ("title", "concepts", "keywords", "use_case", "methodology", "abstract")
+    )
+    domain_norm = normalize_text(domain_text)
     return {
         "fields": fields,
         "row_tokens": row_tokens,
@@ -254,6 +332,8 @@ def row_search_profile(row: dict[str, Any]) -> dict[str, Any]:
         "title_compact": title_norm.replace(" ", ""),
         "use_case_norm": use_case_norm,
         "use_case_tokens": meaningful_tokens(use_case_norm),
+        "domain_norm": domain_norm,
+        "domain_tokens": meaningful_tokens(domain_norm),
         "concepts": concepts,
         "keywords": keywords,
         "terms": [*concepts, *keywords],
@@ -511,12 +591,16 @@ class RagService:
         offset = max(0, int(offset or 0))
         ensure_embedding_count(self.database_path, self.model, self.dimensions)
         profile = question_profile(question)
+        domain_filters = active_domain_filters(profile)
         query_vector = embed_text(question, dimensions=self.dimensions)
         query_features = feature_counts(profile["text"], weight=1.0)
         rows = self._embedding_rows()
         results = []
         for row in rows:
             search_profile = self._row_search_profile(row)
+            row_domains = matching_row_domains(search_profile, domain_filters)
+            if domain_filters and len(row_domains) != len(domain_filters):
+                continue
             vector = self._row_vector(row)
             dense_score = dot(query_vector, vector)
             if math.isnan(dense_score):
@@ -531,6 +615,8 @@ class RagService:
             )
             if matches:
                 score += min(0.08, 0.02 * len(matches))
+            if row_domains:
+                score += min(0.18, 0.06 * len(row_domains))
             results.append(self._result_row(row, score, matches))
         results.sort(key=lambda item: (-item["score"], item["thesis_id"]))
         page_results = results[offset:offset + top_k]
@@ -549,13 +635,14 @@ class RagService:
             "total_pages": total_pages,
             "has_previous": page > 1 and total_pages > 0,
             "has_next": page < total_pages,
+            "domain_filters": domain_filters,
             "results": page_results,
         }
 
     def answer(self, question: str, top_k: int = 5, use_llm: bool = False, model: str | None = None) -> dict[str, Any]:
         search_result = self.search(question, top_k=top_k)
         results = search_result["results"]
-        local_answer = local_rag_answer(question, results)
+        local_answer = local_rag_answer(question, results, domain_filters=search_result.get("domain_filters") or [])
         answer_text = local_answer
         answer_mode = "local"
         llm_error = ""
@@ -601,25 +688,37 @@ class RagService:
         }
 
 
-def local_rag_answer(question: str, results: list[dict[str, Any]]) -> str:
+def use_case_matches_domain(use_case: str, domain_filters: list[str]) -> bool:
+    if not domain_filters:
+        return True
+    normalized = normalize_text(use_case)
+    tokens = meaningful_tokens(normalized)
+    return all(domain_terms_match(DOMAIN_PROFILES[domain]["row_terms"], normalized, tokens) for domain in domain_filters)
+
+
+def local_rag_answer(question: str, results: list[dict[str, Any]], domain_filters: list[str] | None = None) -> str:
     if not results:
         return "No matching thesis metadata was found."
+    domain_filters = domain_filters or []
     top = results[: min(5, len(results))]
     source_ids = ", ".join(row["thesis_id"] for row in top)
     use_cases = []
     concepts = []
     for row in top:
-        if row.get("use_case") and row["use_case"] not in use_cases:
+        if row.get("use_case") and row["use_case"] not in use_cases and use_case_matches_domain(row["use_case"], domain_filters):
             use_cases.append(row["use_case"])
         for concept in split_terms(row.get("concepts")):
             if concept not in concepts:
                 concepts.append(concept)
     lines = [
         f"Closest theses for the question are {source_ids}.",
-        "Main use cases: " + "; ".join(use_cases[:4]) + ".",
         "Relevant concepts: " + "; ".join(concepts[:8]) + ".",
         "Use the listed thesis IDs as sources before opening the PDFs.",
     ]
+    if domain_filters:
+        lines.insert(1, "Applied domain filter: " + ", ".join(domain_filters) + ".")
+    if use_cases:
+        lines.insert(1 if not domain_filters else 2, "Main use cases: " + "; ".join(use_cases[:4]) + ".")
     return " ".join(line for line in lines if line.strip())
 
 

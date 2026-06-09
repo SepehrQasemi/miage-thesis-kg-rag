@@ -44,7 +44,7 @@ The first version contains:
 - Concepts: concept index, connected theses, related concepts
 - Dataset: complete extracted dataset table with CSV copy and download actions
 - Ask / RAG: ask questions over local metadata embeddings, optionally show all ranked sources with 20 results per page, open each source profile inside the app, and open the PDF from that profile
-- Import PDF: upload one or more PDFs, extract, review each draft, approve, and refresh the local graph and RAG index
+- Import PDFs: upload one or more PDFs together, extract, review each draft, approve, and refresh the local graph and RAG index
 
 ## API
 
@@ -82,7 +82,7 @@ New PDFs are not inserted directly into the main dataset.
 
 The app uses this workflow:
 
-1. Upload one PDF or select several PDFs from the Import PDF screen.
+1. Upload one PDF or select several PDFs from the Import PDFs screen.
 2. Store it in `data/staging/imports`.
 3. Check the PDF hash against active documents to prevent duplicates.
 4. Extract first-page metadata with the local NLP pipeline.

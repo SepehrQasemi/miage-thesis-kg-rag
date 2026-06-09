@@ -72,7 +72,7 @@ If `use_llm` is false, the backend returns a deterministic local answer from the
 
 ## Import Integration
 
-When a new PDF is approved from the Import PDF screen, the app updates:
+When a new PDF is approved from the Import PDFs screen, the app updates:
 
 - SQLite `documents`
 - `data/processed/theses.csv`

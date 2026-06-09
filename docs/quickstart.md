@@ -73,8 +73,8 @@ http://127.0.0.1:8000
 
 Preferred workflow:
 
-1. Open the `Import PDF` screen.
-2. Upload one thesis PDF, or select several PDFs at once.
+1. Open the `Import PDFs` screen.
+2. Upload one thesis PDF, or select several PDFs at once in the same file picker.
 3. Review the extracted metadata for each draft in the import queue.
 4. Optionally generate local LLM suggestions.
 5. Apply suggestions only if they look correct.

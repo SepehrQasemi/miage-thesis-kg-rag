@@ -30,7 +30,7 @@ const viewTitles = {
   concepts: ["Concepts", "Explore frequent concepts and their connected theses."],
   dataset: ["Dataset CSV", "View every extracted thesis row in one table."],
   rag: ["Ask / RAG", "Ask questions over local thesis metadata and cited sources."],
-  import: ["Import PDF", "Add a new thesis through extraction, review, and approval."],
+  import: ["Import PDFs", "Add one or more theses through extraction, review, and approval."],
 };
 
 const api = {
@@ -340,7 +340,7 @@ async function askRag() {
       ]);
       renderRagResult(answer, sources);
       renderRagStatus(
-        `Retrieved ${formatNumber(sources.count || 0)} of ${formatNumber(sources.total || 0)} source theses.`,
+        `Retrieved ${formatNumber(sources.count || 0)} of ${formatNumber(sources.total || 0)} source theses${domainFilterSuffix(sources)}.`,
         answer.answer_mode === "ollama_unavailable" ? "warning" : "success",
       );
     } else {
@@ -350,13 +350,18 @@ async function askRag() {
         use_llm: useLlm,
       });
       renderRagResult(result);
-      renderRagStatus(`Retrieved ${formatNumber(result.results?.length || 0)} source theses.`, result.answer_mode === "ollama_unavailable" ? "warning" : "success");
+      renderRagStatus(`Retrieved ${formatNumber(result.results?.length || 0)} source theses${domainFilterSuffix(result)}.`, result.answer_mode === "ollama_unavailable" ? "warning" : "success");
     }
   } catch (error) {
     renderRagStatus(error.message, "error");
   } finally {
     setRagBusy(false);
   }
+}
+
+function domainFilterSuffix(result) {
+  const domains = result.domain_filters || [];
+  return domains.length ? ` with ${domains.join(", ")} domain filtering` : "";
 }
 
 function normalizedRagTopK() {
@@ -749,7 +754,7 @@ function renderConceptDetail(detail) {
 function updateFileLabel() {
   const files = [...qs("#pdf-file").files];
   if (files.length === 0) {
-    qs("#file-label").textContent = "Choose one or more PDF theses";
+    qs("#file-label").textContent = "Select one or more PDF files";
   } else if (files.length === 1) {
     qs("#file-label").textContent = files[0].name;
   } else {

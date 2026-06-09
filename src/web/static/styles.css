@@ -813,6 +813,8 @@ tbody tr.selected {
   min-height: 116px;
   display: grid;
   place-items: center;
+  align-content: center;
+  gap: 6px;
   padding: 16px;
   border: 1px dashed var(--line);
   border-radius: 8px;
@@ -829,6 +831,14 @@ tbody tr.selected {
 
 .file-drop input {
   display: none;
+}
+
+.file-drop small {
+  max-width: 260px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  text-align: center;
 }
 
 .status-banner {

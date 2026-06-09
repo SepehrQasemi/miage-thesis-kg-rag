@@ -34,7 +34,7 @@
             Ask / RAG
           </button>
           <button class="nav-item" data-view="import" type="button">
-            Import PDF
+            Import PDFs
           </button>
         </nav>
 
@@ -240,14 +240,15 @@
           <div class="import-grid">
             <section class="panel">
               <div class="panel-header">
-                <h3>PDF Import</h3>
+                <h3>PDF Batch Import</h3>
               </div>
               <form id="upload-form" class="upload-form">
                 <label class="file-drop" for="pdf-file">
-                  <span id="file-label">Choose one or more PDF theses</span>
+                  <span id="file-label">Select one or more PDF files</span>
+                  <small>Multiple files can be processed together as one batch.</small>
                   <input id="pdf-file" name="files" type="file" accept="application/pdf,.pdf" multiple />
                 </label>
-                <button class="primary-button" id="process-upload-button" type="submit">Process PDF(s)</button>
+                <button class="primary-button" id="process-upload-button" type="submit">Process selected PDF(s)</button>
               </form>
               <div id="import-status" class="status-banner muted-banner">No draft selected.</div>
               <div id="batch-list" class="batch-list hidden"></div>

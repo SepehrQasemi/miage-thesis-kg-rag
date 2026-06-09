@@ -94,7 +94,7 @@ The web interface contains:
 - `Concepts`: concept index and connected theses;
 - `Dataset`: complete extracted dataset, CSV copy, CSV download;
 - `Ask / RAG`: local question answering, cited sources, show-all result pagination, source profiles, PDF links;
-- `Import PDF`: upload one PDF or several PDFs, review extracted metadata, approve or discard drafts.
+- `Import PDFs`: upload one PDF or several PDFs together, review extracted metadata, approve or discard drafts.
 
 ### Import Workflow
 
@@ -102,8 +102,8 @@ New PDFs should be added through the web UI, not by manually editing the databas
 
 Workflow:
 
-1. Open `Import PDF`.
-2. Select one PDF or multiple PDFs.
+1. Open `Import PDFs`.
+2. Select one PDF or multiple PDFs in the same file picker.
 3. The system stages each file and creates one review draft per new PDF.
 4. The system checks duplicates by PDF hash.
 5. The user reviews title, year, master level, track, keywords, concepts, use case, methodology, and abstract.
@@ -347,7 +347,7 @@ L'interface contient:
 - `Concepts`: index des concepts et memoires connectes;
 - `Dataset`: table complete, copie CSV, telechargement CSV;
 - `Ask / RAG`: questions locales, sources citees, pagination de toutes les sources, profils des sources, liens PDF;
-- `Import PDF`: import d'un PDF ou de plusieurs PDF, verification des metadonnees, validation ou suppression des brouillons.
+- `Import PDFs`: import d'un PDF ou de plusieurs PDF ensemble, verification des metadonnees, validation ou suppression des brouillons.
 
 ### Workflow D'import
 
@@ -355,8 +355,8 @@ Les nouveaux PDF doivent etre ajoutes depuis l'interface web.
 
 Workflow:
 
-1. Ouvrir `Import PDF`.
-2. Selectionner un PDF ou plusieurs PDF.
+1. Ouvrir `Import PDFs`.
+2. Selectionner un PDF ou plusieurs PDF dans la meme fenetre de selection.
 3. Le systeme place chaque fichier en staging et cree un brouillon de verification.
 4. Le systeme detecte les doublons avec le hash du PDF.
 5. L'utilisateur verifie le titre, l'annee, le niveau, le parcours, les mots-cles, les concepts, le cas d'usage, la methodologie et le resume.

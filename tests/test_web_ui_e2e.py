@@ -486,7 +486,7 @@ def test_import_single_pdf_from_ui_updates_dataset_search_and_rag(page, tmp_path
 
     expect(page.locator("#import-status")).to_contain_text(f"Approved {thesis_id}", timeout=30000)
     expect(page.locator("#review-empty")).to_be_visible()
-    expect(page.locator("#file-label")).to_contain_text("Choose one or more PDF theses")
+    expect(page.locator("#file-label")).to_contain_text("Select one or more PDF files")
 
     page.get_by_role("button", name="Thesis Search").click()
     page.locator("#text-query").fill("segmentation")
@@ -580,7 +580,7 @@ def test_import_review_approval_workflow(page, tmp_path):
 
 
 def test_responsive_views_use_mobile_and_tablet_layouts(page):
-    view_buttons = ["Dashboard", "Thesis Search", "Concepts", "Dataset", "Ask / RAG", "Import PDF"]
+    view_buttons = ["Dashboard", "Thesis Search", "Concepts", "Dataset", "Ask / RAG", "Import PDFs"]
     viewports = [
         {"width": 320, "height": 720},
         {"width": 360, "height": 760},
