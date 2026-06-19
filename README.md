@@ -15,7 +15,7 @@ It can:
 - build a local Knowledge Graph;
 - build local metadata embeddings for RAG search;
 - answer questions over thesis metadata with cited sources;
-- show all RAG sources with pagination;
+- show relevant RAG sources with scores and pagination;
 - open an in-app thesis profile and then open the source PDF;
 - optionally use a local Ollama model for review suggestions.
 
@@ -93,7 +93,7 @@ The web interface contains:
 - `Thesis Search`: search, filters, paginated results, thesis detail profile;
 - `Concepts`: concept index and connected theses;
 - `Dataset`: complete extracted dataset, CSV copy, CSV download;
-- `Ask / RAG`: local question answering, cited sources, show-all result pagination, source profiles, PDF links;
+- `Ask / RAG`: local question answering, cited sources, visible relevance scores, show-all relevant-source pagination, source profiles, PDF links;
 - `Import PDFs`: upload one PDF or several PDFs together, review extracted metadata, approve or discard drafts.
 
 ### Import Workflow
@@ -189,10 +189,16 @@ The web app can:
 
 - answer with local retrieval only;
 - optionally use Ollama for answer generation;
-- show cited thesis sources;
-- show all ranked sources with 20 results per page;
+- show cited thesis sources with relevance scores;
+- treat `Max results` / `top_k` as a maximum, not a required result count;
+- filter weak matches with a default relevance threshold of `MIAGE_RAG_MIN_SCORE=0.30`;
+- show all relevant ranked sources above the threshold with 20 results per page;
 - open each source as an in-app thesis profile;
 - open the associated PDF from the profile.
+
+This means rare questions can return fewer sources than requested. For example, if the user asks for 5 sources but only 1 thesis is relevant enough, the UI shows only that one thesis instead of filling the answer with weak matches. The score shown in the UI is a ranking signal, not a thesis quality grade.
+
+For domain questions such as medical/health queries, the backend uses stronger evidence from title plus abstract when possible, so noisy old concepts or keywords are not enough by themselves.
 
 ### Data Policy
 
@@ -268,7 +274,7 @@ Elle permet de:
 - construire un graphe de connaissances local;
 - construire des embeddings locaux pour la recherche RAG;
 - poser des questions sur les metadonnees des memoires avec des sources citees;
-- afficher toutes les sources RAG avec pagination;
+- afficher les sources RAG pertinentes avec score et pagination;
 - ouvrir un profil de memoire dans l'application, puis ouvrir le PDF source;
 - utiliser optionnellement un modele Ollama local pour proposer des corrections.
 
@@ -346,7 +352,7 @@ L'interface contient:
 - `Thesis Search`: recherche, filtres, resultats pagines, profil de memoire;
 - `Concepts`: index des concepts et memoires connectes;
 - `Dataset`: table complete, copie CSV, telechargement CSV;
-- `Ask / RAG`: questions locales, sources citees, pagination de toutes les sources, profils des sources, liens PDF;
+- `Ask / RAG`: questions locales, sources citees, scores de pertinence visibles, pagination des sources pertinentes, profils des sources, liens PDF;
 - `Import PDFs`: import d'un PDF ou de plusieurs PDF ensemble, verification des metadonnees, validation ou suppression des brouillons.
 
 ### Workflow D'import
@@ -442,10 +448,16 @@ L'application peut:
 
 - repondre avec la recherche locale;
 - utiliser Ollama de maniere optionnelle;
-- citer les memoires sources;
-- afficher toutes les sources classees avec 20 resultats par page;
+- citer les memoires sources avec un score de pertinence;
+- traiter `Max results` / `top_k` comme un maximum, pas comme un nombre obligatoire;
+- filtrer les correspondances faibles avec le seuil par defaut `MIAGE_RAG_MIN_SCORE=0.30`;
+- afficher toutes les sources pertinentes au-dessus du seuil avec 20 resultats par page;
 - ouvrir chaque source dans un profil integre a l'application;
 - ouvrir le PDF associe depuis le profil.
+
+Ainsi, une question rare peut retourner moins de sources que le nombre demande. Si l'utilisateur demande 5 sources mais qu'un seul memoire est suffisamment pertinent, l'interface affiche seulement ce memoire au lieu d'ajouter des correspondances faibles. Le score affiche est un signal de classement, pas une note de qualite du memoire.
+
+Pour les questions de domaine, par exemple medical/sante, le backend utilise si possible des preuves plus fortes venant du titre et du resume. Des anciens concepts ou mots-cles bruites ne suffisent donc pas a eux seuls.
 
 ### Politique Des Donnees
 

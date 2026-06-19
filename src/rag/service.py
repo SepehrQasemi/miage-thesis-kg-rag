@@ -28,44 +28,94 @@ from rag.embeddings import (
 
 QUERY_STOPWORDS = {
     "a",
+    "am",
     "an",
     "and",
     "about",
+    "art",
     "are",
     "as",
     "at",
     "by",
     "can",
+    "d",
+    "de",
+    "des",
+    "do",
+    "does",
+    "domaine",
+    "domaines",
     "discuss",
     "discusses",
+    "domain",
+    "domains",
+    "du",
+    "et",
+    "field",
+    "fields",
     "find",
     "for",
     "from",
     "give",
+    "have",
+    "i",
     "in",
     "into",
     "is",
+    "je",
+    "cherche",
+    "l",
+    "la",
+    "le",
+    "les",
+    "look",
+    "looking",
     "me",
+    "memoire",
+    "memoires",
+    "new",
+    "need",
     "of",
     "on",
     "or",
+    "please",
+    "quel",
+    "quelle",
+    "quelles",
+    "quels",
     "related",
     "research",
     "show",
+    "search",
+    "searching",
+    "state",
     "study",
     "studies",
+    "subject",
+    "subjects",
     "technique",
     "techniques",
     "the",
     "thesis",
     "theses",
+    "there",
+    "topic",
+    "topics",
     "to",
+    "treat",
+    "treats",
+    "traitent",
+    "trend",
+    "trends",
     "uses",
     "using",
     "which",
     "with",
     "work",
     "works",
+    "want",
+    "wants",
+    "wanting",
 }
 
 FIELD_WEIGHTS = (
@@ -89,18 +139,24 @@ BROAD_DOMAIN_TOKENS = {
     "artificial",
     "artificielle",
     "classification",
+    "computing",
     "data",
     "deep",
     "detection",
     "donnees",
     "ia",
+    "informatique",
     "intelligence",
     "learning",
+    "logiciel",
+    "logicielle",
+    "logiciels",
     "machine",
     "method",
     "methode",
     "methodes",
     "methods",
+    "ml",
     "model",
     "modele",
     "modeles",
@@ -114,6 +170,7 @@ BROAD_DOMAIN_TOKENS = {
     "system",
     "systeme",
     "systems",
+    "software",
 }
 
 DOMAIN_PROFILES = {
@@ -157,6 +214,42 @@ DOMAIN_PROFILES = {
             "alzheimer",
         ],
     },
+}
+
+DEFAULT_MIN_RELEVANCE_SCORE = 0.30
+
+STRUCTURAL_QUERY_TOKENS = {
+    "2020",
+    "2021",
+    "2022",
+    "2023",
+    "2024",
+    "2025",
+    "2026",
+    "m1",
+    "m2",
+    "apprentissage",
+    "classique",
+    "mixte",
+}
+
+CONTEXTUAL_QUERY_TOKENS = {
+    "attack",
+    "attacks",
+    "attaque",
+    "attaques",
+    "cybersecurite",
+    "cybersecurity",
+    "intrusion",
+    "securite",
+    "security",
+}
+
+SOFTWARE_QUALITY_CONTEXT_TOKENS = {
+    "logiciel",
+    "logicielle",
+    "logiciels",
+    "software",
 }
 
 
@@ -224,6 +317,7 @@ def sparse_cosine(left: dict[str, float], right: dict[str, float]) -> float:
 
 def question_profile(question: str) -> dict[str, Any]:
     query_text = expanded_question_text(question)
+    original_normalized = normalize_text(question)
     clues_by_text = {}
     for clue in question_clues(question):
         clue_tokens = meaningful_tokens(clue)
@@ -236,9 +330,153 @@ def question_profile(question: str) -> dict[str, Any]:
     return {
         "text": query_text,
         "normalized": normalize_text(query_text),
+        "original_normalized": original_normalized,
+        "original_tokens": meaningful_tokens(question),
         "tokens": meaningful_tokens(query_text),
         "clues": clues,
     }
+
+
+def configured_min_score() -> float:
+    raw = os.environ.get("MIAGE_RAG_MIN_SCORE")
+    if raw is None:
+        return DEFAULT_MIN_RELEVANCE_SCORE
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_MIN_RELEVANCE_SCORE
+
+
+def specific_query_tokens(profile: dict[str, Any]) -> set[str]:
+    return {
+        token
+        for token in profile["tokens"]
+        if token not in STOPWORDS
+        and token not in QUERY_STOPWORDS
+        and token not in BROAD_DOMAIN_TOKENS
+        and token not in STRUCTURAL_QUERY_TOKENS
+    }
+
+
+def query_anchor_tokens(profile: dict[str, Any]) -> set[str]:
+    tokens = {
+        token
+        for token in profile["original_tokens"]
+        if token not in STOPWORDS
+        and token not in QUERY_STOPWORDS
+        and token not in BROAD_DOMAIN_TOKENS
+        and token not in STRUCTURAL_QUERY_TOKENS
+    }
+    non_contextual = tokens - CONTEXTUAL_QUERY_TOKENS
+    return non_contextual or tokens
+
+
+def anchorable_tokens(tokens: set[str]) -> set[str]:
+    return {
+        token
+        for token in tokens
+        if token not in STOPWORDS
+        and token not in QUERY_STOPWORDS
+        and token not in BROAD_DOMAIN_TOKENS
+        and token not in STRUCTURAL_QUERY_TOKENS
+    }
+
+
+def original_query_clue_phrases(profile: dict[str, Any]) -> list[tuple[str, set[str]]]:
+    normalized = profile["original_normalized"]
+    tokens = [
+        token
+        for token in normalized.split()
+        if token not in STOPWORDS and token not in QUERY_STOPWORDS
+    ]
+    clues_by_text: dict[str, set[str]] = {}
+    for size in range(1, min(5, len(tokens)) + 1):
+        for index in range(0, len(tokens) - size + 1):
+            clue = " ".join(tokens[index:index + size])
+            clue_tokens = meaningful_tokens(clue)
+            if clue and clue_tokens:
+                clues_by_text.setdefault(clue, clue_tokens)
+    return list(clues_by_text.items())
+
+
+def requires_software_quality_context(profile: dict[str, Any]) -> bool:
+    original_tokens = profile["original_tokens"]
+    return "software" in original_tokens and bool({"quality", "control"} & original_tokens)
+
+
+def query_anchor_clues(profile: dict[str, Any]) -> list[tuple[str, set[str]]]:
+    anchors = query_anchor_tokens(profile)
+    if not anchors:
+        return []
+    clues_by_text: dict[str, set[str]] = {}
+    for clue, clue_tokens in profile["clues"]:
+        if specific_query_tokens({"tokens": clue_tokens}) & anchors:
+            clues_by_text.setdefault(clue, clue_tokens)
+    for clue, clue_tokens in original_query_clue_phrases(profile):
+        clue_specific = anchorable_tokens(clue_tokens)
+        if not clue_specific or not (clue_specific & anchors):
+            continue
+        clue_has_broad_tokens = bool(clue_tokens & BROAD_DOMAIN_TOKENS)
+        if clue_has_broad_tokens and len(clue_specific) < 2:
+            continue
+        for expansion in semantic_expansions(clue):
+            expansion_norm = normalize_text(expansion)
+            expansion_tokens = meaningful_tokens(expansion_norm)
+            expansion_specific = anchorable_tokens(expansion_tokens)
+            if not expansion_norm or not expansion_specific:
+                continue
+            if len(clue_specific) > 1 and len(expansion_norm.split()) < 2:
+                continue
+            if len(clue_specific) > 1 and len(expansion_specific) < min(2, len(clue_specific)):
+                continue
+            clues_by_text.setdefault(expansion_norm, expansion_tokens)
+    for token in anchors:
+        for clue in [token, *semantic_expansions(token)]:
+            clue_norm = normalize_text(clue)
+            clue_tokens = meaningful_tokens(clue_norm)
+            if clue_norm and clue_tokens:
+                clues_by_text.setdefault(clue_norm, clue_tokens)
+    if requires_software_quality_context(profile):
+        clues_by_text = {
+            clue: clue_tokens
+            for clue, clue_tokens in clues_by_text.items()
+            if clue_tokens & SOFTWARE_QUALITY_CONTEXT_TOKENS
+        }
+    return sorted(
+        clues_by_text.items(),
+        key=lambda item: (-len(item[1]), -len(item[0]), item[0]),
+    )
+
+
+def matched_specific_terms(matches: list[str], specific_tokens: set[str]) -> bool:
+    for term in matches:
+        term_tokens = specific_query_tokens({"tokens": meaningful_tokens(term)})
+        if term_tokens & specific_tokens:
+            return True
+    return False
+
+
+def has_relevance_evidence(
+    specific_tokens: set[str],
+    anchor_clues: list[tuple[str, set[str]]],
+    row_profile: dict[str, Any],
+    matches: list[str],
+    domain_filters: list[str],
+    row_domains: list[str],
+) -> bool:
+    if anchor_clues:
+        for clue, clue_tokens in anchor_clues:
+            for _field, _weight, field_norm, field_tokens in row_profile["evidence_fields"]:
+                if phrase_matches(clue, clue_tokens, field_norm, field_tokens):
+                    return True
+        return bool(domain_filters and len(row_domains) == len(domain_filters))
+    if not specific_tokens:
+        return True
+    if specific_tokens & row_profile["row_tokens"]:
+        return True
+    if matched_specific_terms(matches, specific_tokens):
+        return True
+    return bool(domain_filters and len(row_domains) == len(domain_filters))
 
 
 def domain_terms_match(terms: list[str], normalized: str, tokens: set[str]) -> bool:
@@ -266,7 +504,11 @@ def matching_row_domains(row_profile: dict[str, Any], domains: list[str]) -> lis
     matches = []
     for domain in domains:
         spec = DOMAIN_PROFILES[domain]
-        if domain_terms_match(spec["row_terms"], row_profile["domain_norm"], row_profile["domain_tokens"]):
+        if domain_terms_match(
+            spec["row_terms"],
+            row_profile["domain_evidence_norm"],
+            row_profile["domain_evidence_tokens"],
+        ):
             matches.append(domain)
     return matches
 
@@ -288,12 +530,19 @@ def phrase_matches(clue: str, clue_tokens: set[str], field_norm: str, field_toke
 def row_search_profile(row: dict[str, Any]) -> dict[str, Any]:
     fields = []
     row_tokens = set()
+    abstract_text = str(row.get("abstract") or "").strip()
     for field, weight in FIELD_WEIGHTS:
         value = str(row.get(field) or "")
         field_norm = normalize_text(value)
         field_tokens = meaningful_tokens(value)
         row_tokens.update(field_tokens)
         fields.append((field, weight, field_norm, field_tokens))
+    anchor_evidence_names = (
+        {"title", "use_case", "abstract"}
+        if abstract_text
+        else {"title", "concepts", "keywords", "use_case"}
+    )
+    evidence_fields = [item for item in fields if item[0] in anchor_evidence_names]
 
     concepts = []
     for concept in split_terms(row.get("concepts")):
@@ -325,8 +574,14 @@ def row_search_profile(row: dict[str, Any]) -> dict[str, Any]:
         for field in ("title", "concepts", "keywords", "use_case", "methodology", "abstract")
     )
     domain_norm = normalize_text(domain_text)
+    domain_evidence_text = " ".join(
+        str(row.get(field) or "")
+        for field in (("title", "abstract") if abstract_text else ("title", "use_case"))
+    )
+    domain_evidence_norm = normalize_text(domain_evidence_text)
     return {
         "fields": fields,
+        "evidence_fields": evidence_fields,
         "row_tokens": row_tokens,
         "title_norm": title_norm,
         "title_compact": title_norm.replace(" ", ""),
@@ -334,6 +589,8 @@ def row_search_profile(row: dict[str, Any]) -> dict[str, Any]:
         "use_case_tokens": meaningful_tokens(use_case_norm),
         "domain_norm": domain_norm,
         "domain_tokens": meaningful_tokens(domain_norm),
+        "domain_evidence_norm": domain_evidence_norm,
+        "domain_evidence_tokens": meaningful_tokens(domain_evidence_norm),
         "concepts": concepts,
         "keywords": keywords,
         "terms": [*concepts, *keywords],
@@ -583,14 +840,17 @@ class RagService:
             self._search_profile_cache[thesis_id] = row_search_profile(row)
         return self._search_profile_cache[thesis_id]
 
-    def search(self, question: str, top_k: int = 5, offset: int = 0) -> dict[str, Any]:
+    def search(self, question: str, top_k: int = 5, offset: int = 0, min_score: float | None = None) -> dict[str, Any]:
         question = question.strip()
         if not question:
             raise ValueError("Question is required.")
         top_k = max(1, min(int(top_k or 5), 20))
         offset = max(0, int(offset or 0))
+        min_score = configured_min_score() if min_score is None else max(0.0, float(min_score))
         ensure_embedding_count(self.database_path, self.model, self.dimensions)
         profile = question_profile(question)
+        specific_tokens = specific_query_tokens(profile)
+        anchor_clues = query_anchor_clues(profile)
         domain_filters = active_domain_filters(profile)
         query_vector = embed_text(question, dimensions=self.dimensions)
         query_features = feature_counts(profile["text"], weight=1.0)
@@ -617,7 +877,16 @@ class RagService:
                 score += min(0.08, 0.02 * len(matches))
             if row_domains:
                 score += min(0.18, 0.06 * len(row_domains))
-            results.append(self._result_row(row, score, matches))
+            result_row = self._result_row(row, score, matches)
+            if result_row["score"] >= min_score and has_relevance_evidence(
+                specific_tokens,
+                anchor_clues,
+                search_profile,
+                matches,
+                domain_filters,
+                row_domains,
+            ):
+                results.append(result_row)
         results.sort(key=lambda item: (-item["score"], item["thesis_id"]))
         page_results = results[offset:offset + top_k]
         page = (offset // top_k) + 1
@@ -625,6 +894,7 @@ class RagService:
         return {
             "question": question,
             "top_k": top_k,
+            "min_score": round(min_score, 4),
             "embedding_model": self.model,
             "embedding_dimensions": self.dimensions,
             "count": len(page_results),
@@ -639,8 +909,15 @@ class RagService:
             "results": page_results,
         }
 
-    def answer(self, question: str, top_k: int = 5, use_llm: bool = False, model: str | None = None) -> dict[str, Any]:
-        search_result = self.search(question, top_k=top_k)
+    def answer(
+        self,
+        question: str,
+        top_k: int = 5,
+        use_llm: bool = False,
+        model: str | None = None,
+        min_score: float | None = None,
+    ) -> dict[str, Any]:
+        search_result = self.search(question, top_k=top_k, min_score=min_score)
         results = search_result["results"]
         local_answer = local_rag_answer(question, results, domain_filters=search_result.get("domain_filters") or [])
         answer_text = local_answer

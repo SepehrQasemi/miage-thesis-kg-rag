@@ -117,6 +117,202 @@ def test_medical_domain_query_filters_non_medical_fillers(tmp_path):
     assert "cybersecurite / detection d'attaques" not in answer["answer"]
 
 
+def test_rag_top_k_is_maximum_not_forced_result_count(tmp_path):
+    db_file = tmp_path / "rag.sqlite"
+    with connect(db_file) as conn:
+        init_schema(conn)
+        insert_document(
+            conn,
+            "thesis_0001",
+            "Analyse de parties dans le jeu League of Legends",
+            "prediction; jeu video; league of legends",
+            "analyse de performances dans le jeu League of Legends",
+        )
+        insert_document(
+            conn,
+            "thesis_0002",
+            "Optimisation de flux aeroportuaires",
+            "optimisation; graphes; flux",
+            "optimisation operationnelle",
+        )
+        insert_document(
+            conn,
+            "thesis_0003",
+            "Cloud security monitoring",
+            "cybersecurite; cloud computing; detection",
+            "cybersecurite / detection d'attaques",
+        )
+        conn.commit()
+
+    rebuild_embeddings(db_file)
+
+    result = RagService(db_file).search("league of legends", top_k=5)
+
+    assert result["top_k"] == 5
+    assert result["min_score"] == 0.3
+    assert result["count"] == 1
+    assert result["total"] == 1
+    assert [row["thesis_id"] for row in result["results"]] == ["thesis_0001"]
+
+
+def test_rag_returns_empty_when_every_candidate_is_below_relevance_threshold(tmp_path):
+    db_file = tmp_path / "rag.sqlite"
+    with connect(db_file) as conn:
+        init_schema(conn)
+        insert_document(
+            conn,
+            "thesis_0001",
+            "Cloud security monitoring",
+            "cybersecurite; cloud computing; detection",
+            "cybersecurite / detection d'attaques",
+        )
+        insert_document(
+            conn,
+            "thesis_0002",
+            "Fraud detection",
+            "machine learning; detection; fraude",
+            "detection de fraude / risque financier",
+        )
+        conn.commit()
+
+    rebuild_embeddings(db_file)
+
+    result = RagService(db_file).search("xylophone banana", top_k=5)
+
+    assert result["count"] == 0
+    assert result["total"] == 0
+    assert result["results"] == []
+
+
+def test_rag_ignores_user_request_words_when_filtering_anchors(tmp_path):
+    db_file = tmp_path / "rag.sqlite"
+    with connect(db_file) as conn:
+        init_schema(conn)
+        insert_document(
+            conn,
+            "thesis_0001",
+            "Detection de fake news avec BERT",
+            "fake news; detection de desinformation; NLP",
+            "medias / detection de desinformation",
+        )
+        insert_document(
+            conn,
+            "thesis_0002",
+            "Prediction du diabete avec apprentissage federe",
+            "sante; federated learning; prediction",
+            "sante / aide au diagnostic",
+        )
+        conn.execute(
+            """
+            UPDATE documents
+            SET abstract = 'This work needs a robust medical prediction model.'
+            WHERE thesis_id = 'thesis_0002'
+            """
+        )
+        conn.commit()
+
+    rebuild_embeddings(db_file)
+
+    result = RagService(db_file).search("I need theses about fake news detection", top_k=5)
+
+    assert result["total"] == 1
+    assert [row["thesis_id"] for row in result["results"]] == ["thesis_0001"]
+
+
+def test_rag_french_ddos_query_uses_ddos_as_anchor_not_filler_words(tmp_path):
+    db_file = tmp_path / "rag.sqlite"
+    with connect(db_file) as conn:
+        init_schema(conn)
+        insert_document(
+            conn,
+            "thesis_0001",
+            "Detection des attaques par deni de service DDoS",
+            "cybersecurite; ddos; detection",
+            "cybersecurite / detection d'attaques",
+        )
+        insert_document(
+            conn,
+            "thesis_0002",
+            "Cybersecurite des systemes industriels",
+            "cybersecurite; detection",
+            "cybersecurite / detection d'attaques",
+        )
+        conn.execute(
+            """
+            UPDATE documents
+            SET abstract = 'Je cherche des memoires et des exemples generaux de securite.'
+            WHERE thesis_id = 'thesis_0002'
+            """
+        )
+        conn.commit()
+
+    rebuild_embeddings(db_file)
+
+    result = RagService(db_file).search(
+        "Je cherche des mémoires sur les attaques DDoS et la cybersécurité",
+        top_k=5,
+    )
+
+    assert result["total"] == 1
+    assert [row["thesis_id"] for row in result["results"]] == ["thesis_0001"]
+
+
+def test_rag_quantum_computing_requires_quantum_anchor_not_generic_computing(tmp_path):
+    db_file = tmp_path / "rag.sqlite"
+    with connect(db_file) as conn:
+        init_schema(conn)
+        insert_document(
+            conn,
+            "thesis_0001",
+            "Loi de Moore a l'epreuve de l'informatique quantique",
+            "informatique quantique; algorithmes quantiques",
+            "informatique quantique / analyse technologique",
+        )
+        insert_document(
+            conn,
+            "thesis_0002",
+            "Cloud computing security monitoring",
+            "cloud computing; cybersecurite; detection",
+            "cybersecurite / detection d'attaques",
+        )
+        conn.commit()
+
+    rebuild_embeddings(db_file)
+
+    result = RagService(db_file).search("I am looking for theses about quantum computing", top_k=5)
+
+    assert result["total"] == 1
+    assert [row["thesis_id"] for row in result["results"]] == ["thesis_0001"]
+
+
+def test_rag_software_quality_control_keeps_software_context(tmp_path):
+    db_file = tmp_path / "rag.sqlite"
+    with connect(db_file) as conn:
+        init_schema(conn)
+        insert_document(
+            conn,
+            "thesis_0001",
+            "Controle de qualite des logiciels",
+            "qualite logiciels; controle qualite logiciels",
+            "developpement logiciel / controle qualite",
+        )
+        insert_document(
+            conn,
+            "thesis_0002",
+            "Qualite des referentiels de donnees",
+            "qualite referentiels; data profiling; indicateurs",
+            "gestion des donnees / controle qualite",
+        )
+        conn.commit()
+
+    rebuild_embeddings(db_file)
+
+    result = RagService(db_file).search("Which theses are about software quality control?", top_k=5)
+
+    assert result["total"] == 1
+    assert [row["thesis_id"] for row in result["results"]] == ["thesis_0001"]
+
+
 def test_rag_service_reloads_cached_rows_after_embedding_rebuild(tmp_path):
     db_file = tmp_path / "rag.sqlite"
     with connect(db_file) as conn:

@@ -204,6 +204,38 @@ def test_rag_search_endpoint_returns_semantic_sources(tmp_path, monkeypatch):
     assert data["results"][0]["pdf_url"] == "/api/files/thesis_0001"
 
 
+def test_rag_search_endpoint_uses_result_count_as_maximum(tmp_path, monkeypatch):
+    db_file = tmp_path / "web.sqlite"
+    seed_database(db_file)
+    with connect(db_file) as conn:
+        conn.execute(
+            """
+            UPDATE documents
+            SET title = 'Cloud security',
+                keywords = 'cybersecurite; cloud computing; detection',
+                concepts = 'cybersecurite; cloud computing; detection',
+                use_case = 'cybersecurite / detection d''attaques'
+            WHERE thesis_id = 'thesis_0002'
+            """
+        )
+        conn.commit()
+    monkeypatch.setenv("MIAGE_APP_DB", str(db_file))
+    monkeypatch.setenv("MIAGE_RAW_PDF_DIR", str(tmp_path / "raw_pdf"))
+    monkeypatch.setattr(web_app, "service", lambda: GraphQueryService(db_file))
+    web_app._RAG_SERVICES.clear()
+    client = TestClient(web_app.app)
+
+    response = client.post("/api/rag/search", json={"question": "cloud security", "top_k": 5})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["top_k"] == 5
+    assert data["min_score"] == 0.3
+    assert data["count"] == 1
+    assert data["total"] == 1
+    assert data["results"][0]["thesis_id"] == "thesis_0002"
+
+
 def test_rag_search_all_results_is_paginated_to_twenty_max(tmp_path, monkeypatch):
     client = client_for(tmp_path, monkeypatch)
 

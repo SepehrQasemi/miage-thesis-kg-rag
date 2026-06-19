@@ -52,6 +52,7 @@ class LLMSuggestionRequest(BaseModel):
 class RagRequest(BaseModel):
     question: str = Field(min_length=2)
     top_k: int = Field(default=5, ge=1, le=20)
+    min_score: float | None = Field(default=None, ge=0, le=10)
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=20)
     all_results: bool = False
@@ -125,8 +126,9 @@ def rag_search(request: RagRequest) -> dict:
                 request.question,
                 top_k=request.page_size,
                 offset=(request.page - 1) * request.page_size,
+                min_score=request.min_score,
             )
-        return rag_service().search(request.question, top_k=request.top_k)
+        return rag_service().search(request.question, top_k=request.top_k, min_score=request.min_score)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -139,6 +141,7 @@ def rag_answer(request: RagRequest) -> dict:
             top_k=request.top_k,
             use_llm=request.use_llm,
             model=request.model,
+            min_score=request.min_score,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

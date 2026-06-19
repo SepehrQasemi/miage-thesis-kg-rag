@@ -239,6 +239,18 @@ textarea {
   font-size: 13px;
 }
 
+.readonly-field {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--text);
+  font-weight: 700;
+}
+
 .rank-list,
 .concept-list {
   display: grid;
@@ -663,6 +675,13 @@ tbody tr.selected {
 .rag-source-header strong {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.rag-score {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .rag-source-card h4 {

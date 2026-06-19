@@ -43,7 +43,7 @@ The first version contains:
 - Thesis Detail: metadata, concepts, keywords, similar theses, PDF link
 - Concepts: concept index, connected theses, related concepts
 - Dataset: complete extracted dataset table with CSV copy and download actions
-- Ask / RAG: ask questions over local metadata embeddings, optionally show all ranked sources with 20 results per page, open each source profile inside the app, and open the PDF from that profile
+- Ask / RAG: ask questions over local metadata embeddings, show relevance scores, optionally show all relevant sources above the threshold with 20 results per page, open each source profile inside the app, and open the PDF from that profile
 - Import PDFs: upload one or more PDFs together, extract, review each draft, approve, and refresh the local graph and RAG index
 
 ## API
@@ -127,12 +127,20 @@ The first RAG version is local and metadata-based. It does not chunk the full PD
 1. Build one retrieval text per active thesis from title, concepts, keywords, use case, methodology, abstract, introduction, and conclusion.
 2. Store a deterministic local embedding in SQLite table `document_embeddings`.
 3. Embed the user question with the same local model.
-4. Rank theses by cosine similarity.
-5. Return an answer plus cited thesis IDs and PDF links.
-6. When `Show all results` is enabled in the Ask/RAG screen, return the ranked source list through server-side pagination with a maximum of 20 theses per page.
-7. Each RAG source can be opened as an in-app thesis profile containing metadata, concepts, keywords, similar theses, and a PDF link.
+4. Rank theses with a combined score based on local embedding similarity, sparse lexical overlap, and metadata signals.
+5. Apply the relevance threshold. The default is `MIAGE_RAG_MIN_SCORE=0.30`.
+6. Treat `Max results` / `top_k` as a maximum, not a required count. If only one thesis is relevant enough, only one source is shown.
+7. Return an answer plus cited thesis IDs, relevance scores, and PDF links.
+8. When `Show all results` is enabled in the Ask/RAG screen, return all relevant sources above the threshold through server-side pagination with a maximum of 20 theses per page.
+9. Each RAG source can be opened as an in-app thesis profile containing metadata, concepts, keywords, similar theses, and a PDF link.
 
 `POST /api/rag/answer` works without Ollama by returning a local source-grounded answer. If `use_llm` is true, the backend tries Ollama and falls back to the local answer if Ollama is unavailable.
+
+The source score is visible in the UI so users can understand why one source is ranked above another. It is a ranking signal, not a thesis quality grade.
+
+For domain questions such as medical/health queries, the backend uses stronger evidence from title plus abstract when possible. This prevents old noisy concepts or keywords from being enough by themselves.
+
+For non-domain questions, the backend also keeps anchor clues from the original question. For example, `blockchain security` must keep evidence for the blockchain anchor; general security alone is not enough.
 
 ## Responsive QA
 
@@ -166,8 +174,9 @@ These tests start the FastAPI app with a temporary SQLite database and verify:
 - similar theses are shown;
 - concept explorer loads connected theses and related concepts;
 - complete dataset rows are shown with a CSV download link;
-- Ask/RAG retrieves an answer and cited sources;
-- Ask/RAG can show all ranked sources in 20-result pages;
+- Ask/RAG retrieves an answer and cited sources with visible relevance scores;
+- Ask/RAG treats the requested result count as a maximum and does not fill rare questions with weak matches;
+- Ask/RAG can show all relevant sources above the threshold in 20-result pages;
 - Ask/RAG source profiles open inside the app and expose the PDF link;
 - PDF import creates a review draft;
 - local LLM suggestions are non-blocking and do not update the database by themselves;

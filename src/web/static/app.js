@@ -109,6 +109,11 @@ function formatNumber(value) {
   return new Intl.NumberFormat("en-US").format(value ?? 0);
 }
 
+function formatScore(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed.toFixed(3) : "N/A";
+}
+
 function truncate(value, length = 120) {
   const text = String(value ?? "");
   return text.length > length ? `${text.slice(0, length - 3)}...` : text;
@@ -300,9 +305,9 @@ function renderDatasetCopyStatus(message, kind) {
 
 async function askRag() {
   const question = valueOf("#rag-question");
-  const topK = normalizedRagTopK();
   const useLlm = qs("#rag-use-llm").checked;
   const showAll = qs("#rag-show-all").checked;
+  const topK = showAll ? 5 : normalizedRagTopK();
   if (!question) {
     renderRagStatus("Enter a question first.", "warning");
     return;
@@ -328,7 +333,7 @@ async function askRag() {
       const [answer, sources] = await Promise.all([
         api.postJson("/api/rag/answer", {
           question,
-          top_k: Math.min(topK, 5),
+          top_k: 5,
           use_llm: useLlm,
         }),
         api.postJson("/api/rag/search", {
@@ -340,7 +345,7 @@ async function askRag() {
       ]);
       renderRagResult(answer, sources);
       renderRagStatus(
-        `Retrieved ${formatNumber(sources.count || 0)} of ${formatNumber(sources.total || 0)} source theses${domainFilterSuffix(sources)}.`,
+        `Retrieved ${formatNumber(sources.count || 0)} of ${formatNumber(sources.total || 0)} relevant source theses${domainFilterSuffix(sources)}.`,
         answer.answer_mode === "ollama_unavailable" ? "warning" : "success",
       );
     } else {
@@ -350,7 +355,7 @@ async function askRag() {
         use_llm: useLlm,
       });
       renderRagResult(result);
-      renderRagStatus(`Retrieved ${formatNumber(result.results?.length || 0)} source theses${domainFilterSuffix(result)}.`, result.answer_mode === "ollama_unavailable" ? "warning" : "success");
+      renderRagStatus(`Retrieved ${formatNumber(result.results?.length || 0)} relevant source theses${domainFilterSuffix(result)}.`, result.answer_mode === "ollama_unavailable" ? "warning" : "success");
     }
   } catch (error) {
     renderRagStatus(error.message, "error");
@@ -386,7 +391,7 @@ async function loadRagSourcesPage(page) {
       page_size: state.ragPageSize,
     });
     renderRagSources(result);
-    renderRagStatus(`Showing ${formatNumber(result.count || 0)} of ${formatNumber(result.total || 0)} source theses.`, "success");
+    renderRagStatus(`Showing ${formatNumber(result.count || 0)} of ${formatNumber(result.total || 0)} relevant source theses.`, "success");
   } catch (error) {
     renderRagStatus(error.message, "error");
   } finally {
@@ -395,7 +400,8 @@ async function loadRagSourcesPage(page) {
 }
 
 function renderRagResult(result, sourcePage = null) {
-  qs("#rag-meta").textContent = `${result.embedding_model || "local"} | ${result.embedding_dimensions || 0} dimensions`;
+  const minScore = result.min_score ?? sourcePage?.min_score;
+  qs("#rag-meta").textContent = `${result.embedding_model || "local"} | ${result.embedding_dimensions || 0} dimensions${minScore !== undefined ? ` | min score ${formatScore(minScore)}` : ""}`;
   qs("#rag-answer-mode").textContent = result.answer_mode === "ollama" ? "Ollama" : "Local";
   qs("#rag-answer").classList.remove("empty-state");
   qs("#rag-answer").innerHTML = `
@@ -449,6 +455,7 @@ function renderRagSource(row) {
     <article class="rag-source-card">
       <div class="rag-source-header">
         <strong>${escapeHtml(row.thesis_id)} | ${escapeHtml(row.year)} | ${escapeHtml(row.master_level)} | ${escapeHtml(row.track)}</strong>
+        <span class="rag-score" title="Relevance score">${formatScore(row.score)}</span>
       </div>
       <h4>${escapeHtml(row.title)}</h4>
       <p>${escapeHtml(truncate(row.use_case, 120))}</p>
@@ -499,6 +506,9 @@ function setRagBusy(isBusy) {
 function syncRagControls() {
   const showAll = qs("#rag-show-all").checked;
   qs("#rag-top-k").disabled = showAll || state.ragBusy;
+  qs("#rag-top-k").classList.toggle("hidden", showAll);
+  qs("#rag-page-size-display").classList.toggle("hidden", !showAll);
+  qs("#rag-top-k-label-text").textContent = showAll ? "Source pages" : "Max results";
   if (!showAll) {
     state.ragAllResults = false;
     renderRagPagination({ total_pages: 0 });

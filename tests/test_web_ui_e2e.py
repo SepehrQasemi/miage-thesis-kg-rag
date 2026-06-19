@@ -295,9 +295,24 @@ def test_rag_view_retrieves_answer_and_sources(page):
 
     expect(page.locator("#rag-status")).to_contain_text("Retrieved", timeout=15000)
     expect(page.locator("#rag-answer")).to_contain_text("thesis_000")
+    expect(page.locator("#rag-meta")).to_contain_text("min score 0.300")
     expect(page.locator("#rag-results")).to_contain_text("Cancer detection")
     expect(page.locator("#rag-source-count")).to_contain_text("2 sources")
-    expect(page.locator(".rag-score")).to_have_count(0)
+    expect(page.locator(".rag-score")).to_have_count(2)
+    expect(page.locator(".rag-score").first).to_contain_text(".")
+
+
+def test_rag_view_treats_requested_results_as_maximum(page):
+    page.get_by_role("button", name="Ask / RAG").click()
+    page.locator("#rag-question").fill("cloud security")
+    page.locator("#rag-top-k").fill("5")
+    page.locator("#rag-ask-button").click()
+
+    expect(page.locator("#rag-status")).to_contain_text("Retrieved 1 relevant source", timeout=15000)
+    expect(page.locator("#rag-source-count")).to_contain_text("1 sources")
+    expect(page.locator("#rag-results")).to_contain_text("Cloud security")
+    expect(page.locator("#rag-results")).not_to_contain_text("Cancer detection")
+    expect(page.locator(".rag-score")).to_have_count(1)
 
 
 def test_rag_show_all_sources_paginates_twenty_at_a_time(page):
@@ -321,6 +336,9 @@ def test_rag_show_all_sources_paginates_twenty_at_a_time(page):
     ]
 
     def rag_answer(route):
+        payload = json.loads(route.request.post_data or "{}")
+        assert payload["question"] == "show all health detection theses"
+        assert payload["top_k"] == 5
         route.fulfill(
             status=200,
             content_type="application/json",
@@ -349,6 +367,8 @@ def test_rag_show_all_sources_paginates_twenty_at_a_time(page):
 
     def rag_search(route):
         payload = json.loads(route.request.post_data or "{}")
+        assert payload["question"] == "show all health detection theses"
+        assert payload["page_size"] == 20
         page_number = int(payload.get("page", 1))
         page_size = int(payload.get("page_size", 20))
         start = (page_number - 1) * page_size
@@ -381,10 +401,13 @@ def test_rag_show_all_sources_paginates_twenty_at_a_time(page):
 
     page.get_by_role("button", name="Ask / RAG").click()
     page.locator("#rag-question").fill("show all health detection theses")
+    page.locator("#rag-top-k").fill("999")
     page.locator("#rag-show-all").check()
-    expect(page.locator("#rag-top-k")).to_be_disabled()
+    expect(page.locator("#rag-top-k")).to_be_hidden()
+    expect(page.locator("#rag-page-size-display")).to_contain_text("20 per page")
     page.locator("#rag-ask-button").click()
 
+    expect(page.locator("#rag-question")).to_have_value("show all health detection theses")
     expect(page.locator("#rag-source-count")).to_contain_text("1-20 of 25 sources")
     expect(page.locator("#rag-pagination-status")).to_contain_text("Page 1 of 2 | 20 per page")
     expect(page.locator(".rag-source-card")).to_have_count(20)

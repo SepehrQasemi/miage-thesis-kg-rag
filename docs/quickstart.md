@@ -94,7 +94,21 @@ Use this only after placing PDFs in:
 data/raw/theses_pdf/
 ```
 
-## 5. Check The Installation
+## 5. Ask Questions With RAG
+
+Open the `Ask / RAG` screen and ask a question over the approved thesis metadata.
+
+`Max results` is only a maximum. The app may return fewer sources if only a few theses are relevant enough. By default, sources must have a RAG score of at least `0.30`.
+
+You can tune the threshold with:
+
+```powershell
+$env:MIAGE_RAG_MIN_SCORE="0.30"
+```
+
+Lower values return more sources. Higher values return fewer but stricter sources. The UI shows each source score so the ranking is visible during testing.
+
+## 6. Check The Installation
 
 ```powershell
 python scripts/doctor.py
@@ -103,7 +117,7 @@ python -m pytest
 
 `doctor.py` checks Python, dependencies, database, graph outputs, RAG embeddings, raw PDFs, and optional Ollama availability.
 
-## 6. Common Problems
+## 7. Common Problems
 
 If Playwright tests fail because Chromium is missing:
 
