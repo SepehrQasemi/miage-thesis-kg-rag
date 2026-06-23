@@ -1,44 +1,61 @@
 # Knowledge Graph Schema
 
-This document describes the first permanent Knowledge Graph layer built from the extracted MIAGE thesis metadata.
+## Source Of Truth
 
-The graph is intentionally local and simple. It does not require a paid API, a cloud database, or a Neo4j server. The canonical graph is stored in SQLite and exported as CSV/JSON so it can later be imported into NetworkX, Neo4j, a web UI, or a RAG pipeline.
+Neo4j is the source of truth for the Knowledge Graph.
 
-## Source
+Generated CSV and JSON files in `data/graph` are exports for inspection, reporting, and backup. They are not the runtime database.
 
-The graph is built from active rows in:
+## Node Labels
 
-`data/app.sqlite`
+All graph nodes have the shared label `MiageNode`.
 
-Main source table:
+Specific labels:
 
-`documents`
+- `Thesis`
+- `Concept`
+- `Keyword`
+- `UseCase`
+- `Methodology`
+- `Year`
+- `MasterLevel`
+- `Track`
+- `ImportDraft`
 
-The exported graph files are:
+`ImportDraft` is used for pending upload review. It is not part of the public thesis graph map.
 
-- `data/graph/nodes.csv`
-- `data/graph/edges.csv`
-- `data/graph/knowledge_graph.json`
+## Thesis Properties
 
-The graph is also stored in SQLite tables:
+`Thesis` nodes store the approved metadata:
 
-- `graph_nodes`
-- `graph_edges`
+- `thesis_id`
+- `file_name`
+- `file_path`
+- `sha256`
+- `pages_count`
+- `cover_text`
+- `abstract`
+- `introduction`
+- `conclusion`
+- `year`
+- `title`
+- `master_level`
+- `track`
+- `keywords`
+- `concepts`
+- `use_case`
+- `methodology`
+- `extraction_confidence`
+- `needs_review`
+- `status`
+- `extraction_notes`
+- `processed_at`
+- `created_at`
+- `updated_at`
 
-## Node Types
+## Entity Properties
 
-| Node type | Meaning | Stable ID example |
-|---|---|---|
-| `Thesis` | One thesis PDF/document | `thesis:thesis_0001` |
-| `Concept` | Normalized technical/business concept | `concept:machine-learning` |
-| `Keyword` | Extracted keyword or key phrase | `keyword:business-intelligence` |
-| `UseCase` | Use-case category | `usecase:sante-aide-au-diagnostic` |
-| `Methodology` | Methodology category | `methodology:revue-de-litterature-etat-de-l-art` |
-| `Year` | Thesis year | `year:2025` |
-| `MasterLevel` | `M1`, `M2`, or `N/A` | `masterlevel:m1` |
-| `Track` | `apprentissage`, `classique`, or `N/A` | `track:apprentissage` |
-
-Each node has:
+Entity nodes use:
 
 - `node_id`
 - `node_type`
@@ -47,71 +64,81 @@ Each node has:
 - `source`
 - `properties_json`
 
-## Edge Types
+## Relationship Types
 
-| Edge type | Source | Target | Meaning |
-|---|---|---|---|
-| `HAS_CONCEPT` | `Thesis` | `Concept` | Thesis contains a normalized concept |
-| `HAS_KEYWORD` | `Thesis` | `Keyword` | Thesis contains an extracted keyword |
-| `HAS_USE_CASE` | `Thesis` | `UseCase` | Thesis belongs to a use-case category |
-| `USES_METHODOLOGY` | `Thesis` | `Methodology` | Thesis uses a methodology category |
-| `SUBMITTED_IN` | `Thesis` | `Year` | Thesis was submitted in a given year |
-| `HAS_MASTER_LEVEL` | `Thesis` | `MasterLevel` | Thesis belongs to M1/M2 |
-| `HAS_TRACK` | `Thesis` | `Track` | Thesis belongs to apprenticeship/classical track |
-| `RELATED_TO` | `Thesis` | `Thesis` | Inferred relation based on shared concepts |
+From `Thesis` to entity nodes:
 
-`RELATED_TO` edges are inferred and undirected by interpretation. They are stored once, from the lower thesis ID to the higher thesis ID, to avoid duplicates.
+- `HAS_CONCEPT`
+- `HAS_KEYWORD`
+- `HAS_USE_CASE`
+- `USES_METHODOLOGY`
+- `SUBMITTED_IN`
+- `HAS_MASTER_LEVEL`
+- `HAS_TRACK`
 
-## Normalization Rules
+Between theses:
 
-The first version uses deterministic local normalization:
+- `RELATED_TO`
 
-- labels are stripped and whitespace-normalized;
-- entity IDs are ASCII slugs;
-- known concept aliases are canonicalized, for example `IA` becomes `intelligence artificielle`;
-- track labels are normalized to `apprentissage` or `classique`; legacy/source labels such as `mixte` are represented as `classique`;
-- raw PDF files are never modified;
-- manual corrections remain traceable in `data/manual_overrides/theses_metadata.csv`.
+`RELATED_TO` is inferred when theses share enough concepts. The default threshold is 3 shared concepts.
+
+## Relationship Properties
+
+Relationships store:
+
+- `edge_id`
+- `source_id`
+- `target_id`
+- `edge_type`
+- `weight`
+- `source`
+- `properties_json`
+
+For `RELATED_TO`, `properties_json` includes:
+
+- `shared_concept_count`
+- `shared_concepts`
+- `direction`
+
+## Constraints And Indexes
+
+The setup/doctor scripts create:
+
+- unique `MiageNode.node_id`;
+- unique `Thesis.thesis_id`;
+- unique `ImportDraft.draft_id`;
+- index on `Thesis.sha256`;
+- index on `ImportDraft.sha256`;
+- index on `ImportDraft.status`;
+- index on `MiageNode.node_type`;
+- index on `MiageNode.slug`.
+
+## Rebuild Strategy
+
+When a thesis is approved or when graph maintenance scripts run:
+
+1. Approved thesis rows are read from Neo4j.
+2. The in-memory graph model is rebuilt.
+3. Neo4j `MiageNode` nodes and relationships are replaced.
+4. Import drafts are preserved.
+5. CSV, JSON, and report outputs are regenerated.
+
+This keeps the graph deterministic and avoids partial relationship drift.
 
 ## Validation
 
-The graph validation step checks:
-
-- one `Thesis` node per active document;
-- unique node IDs and edge IDs;
-- no dangling edges;
-- valid node types and edge types;
-- valid JSON properties;
-- every thesis has the required metadata edges;
-- graph CSV row counts match the SQLite graph tables.
-
-Validation outputs:
-
-- `data/reports/knowledge_graph_validation.csv`
-- `data/reports/knowledge_graph_validation_summary.json`
-
-Analysis outputs:
-
-- `data/reports/knowledge_graph_summary.json`
-- `data/reports/knowledge_graph_node_metrics.csv`
-- `data/reports/knowledge_graph_related_theses.csv`
-
-## Commands
-
-Build the graph:
-
-```powershell
-python scripts/build_knowledge_graph.py
-```
-
-Validate the graph:
+Use:
 
 ```powershell
 python scripts/validate_knowledge_graph.py
 ```
 
-Run the full extraction and graph pipeline:
+The validator reads nodes and relationships directly from Neo4j and checks:
 
-```powershell
-python scripts/run_pipeline.py
-```
+- valid node types;
+- valid relationship types;
+- unique node IDs;
+- unique edge IDs;
+- dangling relationship endpoints;
+- required thesis relationships;
+- CSV export row counts.

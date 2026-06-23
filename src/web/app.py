@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import os
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -9,9 +11,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from common.paths import db_path, raw_pdf_dir
-from common.pipeline_outputs import DOCUMENT_EXPORT_COLUMNS, active_documents, write_document_csv
-from graph.query import GraphQueryService
+from common.paths import processed_dir, raw_pdf_dir
+from common.pipeline_outputs import DOCUMENT_EXPORT_COLUMNS
+from graph.knowledge_graph import build_knowledge_graph
+from graph.neo4j_store import Neo4jGraphQueryService, neo4j_settings_from_env
 from ingestion.import_workflow import (
     ImportWorkflowError,
     approve_import,
@@ -28,7 +31,9 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(title="MIAGE Thesis Knowledge Graph", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-_RAG_SERVICES: dict[Path, RagService] = {}
+_GRAPH_SERVICE: Any | None = None
+_GRAPH_SERVICE_KEY: tuple[Any, ...] | None = None
+_RAG_SERVICES: dict[tuple[Any, ...], RagService] = {}
 
 
 class ImportApproval(BaseModel):
@@ -60,22 +65,217 @@ class RagRequest(BaseModel):
     model: str | None = None
 
 
-def database_path() -> Path:
-    db_override = os.environ.get("MIAGE_APP_DB")
-    return Path(db_override) if db_override else db_path()
+GRAPH_MAP_ENTITY_LIMITS = {
+    "Concept": 24,
+    "Keyword": 10,
+    "UseCase": 12,
+    "Methodology": 10,
+    "Year": 12,
+    "MasterLevel": 4,
+    "Track": 4,
+}
+GRAPH_MAP_NODE_ORDER = {
+    "Thesis": 0,
+    "Concept": 1,
+    "UseCase": 2,
+    "Methodology": 3,
+    "Keyword": 4,
+    "Year": 5,
+    "MasterLevel": 6,
+    "Track": 7,
+}
+GRAPH_MAP_EDGE_TYPES = {
+    "HAS_CONCEPT",
+    "HAS_KEYWORD",
+    "HAS_USE_CASE",
+    "USES_METHODOLOGY",
+    "SUBMITTED_IN",
+    "HAS_MASTER_LEVEL",
+    "HAS_TRACK",
+}
 
 
-def service() -> GraphQueryService:
-    return GraphQueryService(database_path())
+def graph_backend() -> str:
+    return "neo4j"
+
+
+def service() -> Neo4jGraphQueryService:
+    global _GRAPH_SERVICE, _GRAPH_SERVICE_KEY
+    settings = neo4j_settings_from_env()
+    key = ("neo4j", settings.uri, settings.user, settings.database)
+    if _GRAPH_SERVICE is None or _GRAPH_SERVICE_KEY != key:
+        _GRAPH_SERVICE = Neo4jGraphQueryService(settings=settings)
+        _GRAPH_SERVICE_KEY = key
+    return _GRAPH_SERVICE
 
 
 def rag_service() -> RagService:
-    path = database_path()
-    service_instance = _RAG_SERVICES.get(path)
+    settings = neo4j_settings_from_env()
+    key = ("neo4j", settings.uri, settings.user, settings.database)
+    service_instance = _RAG_SERVICES.get(key)
     if service_instance is None:
-        service_instance = RagService(path)
-        _RAG_SERVICES[path] = service_instance
+        graph_service = service()
+        service_instance = RagService(rows_provider=graph_service.document_rows)
+        _RAG_SERVICES[key] = service_instance
     return service_instance
+
+
+def graph_map_payload(
+    rows: list[dict[str, Any]],
+    *,
+    backend: str,
+    thesis_limit: int = 60,
+    concept_limit: int = 24,
+) -> dict[str, Any]:
+    graph = build_knowledge_graph(rows, related_min_shared_concepts=0)
+    incoming_counts: Counter[str] = Counter()
+    thesis_targets: dict[str, list[str]] = defaultdict(list)
+
+    for edge in graph.edges.values():
+        if edge.edge_type not in GRAPH_MAP_EDGE_TYPES:
+            continue
+        incoming_counts[edge.target_id] += 1
+        if edge.source_id.startswith("thesis:"):
+            thesis_targets[edge.source_id].append(edge.target_id)
+
+    entity_limits = {**GRAPH_MAP_ENTITY_LIMITS, "Concept": concept_limit}
+    selected_entities: set[str] = set()
+    for node_type, limit in entity_limits.items():
+        candidates = [
+            node
+            for node in graph.nodes.values()
+            if node.node_type == node_type and incoming_counts[node.node_id] > 0
+        ]
+        candidates.sort(key=lambda node: (-incoming_counts[node.node_id], node.label.lower()))
+        selected_entities.update(node.node_id for node in candidates[:limit])
+
+    selected_theses = select_graph_map_theses(rows, thesis_targets, selected_entities, thesis_limit)
+    selected_node_ids = set(selected_entities) | set(selected_theses)
+
+    visible_edges = [
+        edge
+        for edge in graph.sorted_edges()
+        if edge.edge_type in GRAPH_MAP_EDGE_TYPES
+        and edge.source_id in selected_node_ids
+        and edge.target_id in selected_node_ids
+    ]
+    visible_degree: Counter[str] = Counter()
+    for edge in visible_edges:
+        visible_degree[edge.source_id] += 1
+        visible_degree[edge.target_id] += 1
+
+    visible_nodes = [graph.nodes[node_id] for node_id in selected_node_ids if node_id in graph.nodes]
+    visible_nodes.sort(
+        key=lambda node: (
+            GRAPH_MAP_NODE_ORDER.get(node.node_type, 99),
+            -visible_degree[node.node_id],
+            node.label.lower(),
+        )
+    )
+
+    node_type_counts: Counter[str] = Counter(node.node_type for node in graph.nodes.values())
+    edge_type_counts: Counter[str] = Counter(edge.edge_type for edge in graph.edges.values())
+    visible_type_counts: Counter[str] = Counter(node.node_type for node in visible_nodes)
+
+    return {
+        "backend": backend,
+        "nodes": [graph_map_node(node, incoming_counts, visible_degree) for node in visible_nodes],
+        "edges": [
+            {
+                "id": edge.edge_id,
+                "source": edge.source_id,
+                "target": edge.target_id,
+                "type": edge.edge_type,
+                "weight": edge.weight,
+            }
+            for edge in visible_edges
+        ],
+        "stats": {
+            "source_documents": len(rows),
+            "total_nodes": len(graph.nodes),
+            "total_edges": len(graph.edges),
+            "visible_nodes": len(visible_nodes),
+            "visible_edges": len(visible_edges),
+            "visible_node_counts": dict(sorted(visible_type_counts.items())),
+            "node_counts": dict(sorted(node_type_counts.items())),
+            "edge_counts": dict(sorted(edge_type_counts.items())),
+            "thesis_limit": thesis_limit,
+            "concept_limit": concept_limit,
+        },
+    }
+
+
+def select_graph_map_theses(
+    rows: list[dict[str, Any]],
+    thesis_targets: dict[str, list[str]],
+    selected_entities: set[str],
+    thesis_limit: int,
+) -> list[str]:
+    candidates: list[tuple[int, int, str, str]] = []
+    for row in rows:
+        thesis_id = str(row.get("thesis_id") or "")
+        if not thesis_id:
+            continue
+        node_id = f"thesis:{thesis_id}"
+        selected_connection_count = sum(1 for target in thesis_targets.get(node_id, []) if target in selected_entities)
+        if selected_connection_count <= 0:
+            continue
+        candidates.append((selected_connection_count, parse_year(row.get("year")), thesis_id, node_id))
+
+    candidates.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    selected = [node_id for *_unused, node_id in candidates[:thesis_limit]]
+
+    if len(selected) < thesis_limit:
+        selected_set = set(selected)
+        remaining = [
+            (parse_year(row.get("year")), str(row.get("thesis_id") or ""), f"thesis:{row.get('thesis_id')}")
+            for row in rows
+            if row.get("thesis_id") and f"thesis:{row.get('thesis_id')}" not in selected_set
+        ]
+        remaining.sort(key=lambda item: (-item[0], item[1]))
+        selected.extend(node_id for *_unused, node_id in remaining[: thesis_limit - len(selected)])
+
+    return selected
+
+
+def graph_map_node(node: Any, incoming_counts: Counter[str], visible_degree: Counter[str]) -> dict[str, Any]:
+    properties = node.properties or {}
+    if node.node_type == "Thesis":
+        metadata = {
+            "thesis_id": properties.get("thesis_id") or node.slug,
+            "title": properties.get("title") or node.label,
+            "year": properties.get("year") or "",
+            "master_level": properties.get("master_level") or "",
+            "track": properties.get("track") or "",
+            "file_name": properties.get("file_name") or "",
+        }
+        subtitle = " | ".join(str(metadata[key]) for key in ["thesis_id", "year", "master_level", "track"] if metadata[key])
+        return {
+            "id": node.node_id,
+            "type": node.node_type,
+            "label": node.label,
+            "subtitle": subtitle,
+            "weight": max(1, visible_degree[node.node_id]),
+            "incoming_edges": incoming_counts[node.node_id],
+            "metadata": metadata,
+        }
+
+    return {
+        "id": node.node_id,
+        "type": node.node_type,
+        "label": node.label,
+        "subtitle": f"{incoming_counts[node.node_id]} connected thesis{'es' if incoming_counts[node.node_id] != 1 else ''}",
+        "weight": max(1, incoming_counts[node.node_id]),
+        "incoming_edges": incoming_counts[node.node_id],
+        "metadata": {},
+    }
+
+
+def parse_year(value: Any) -> int:
+    try:
+        return int(str(value or "").strip())
+    except ValueError:
+        return 0
 
 
 @app.get("/")
@@ -100,7 +300,7 @@ def facets() -> dict:
 
 @app.get("/api/dataset")
 def dataset() -> dict:
-    rows = active_documents(database_path())
+    rows = service().document_rows()
     export_rows = [
         {column: row.get(column, "") for column in DOCUMENT_EXPORT_COLUMNS}
         for row in rows
@@ -114,8 +314,17 @@ def dataset() -> dict:
 
 @app.get("/api/dataset.csv")
 def dataset_csv() -> FileResponse:
-    csv_path = write_document_csv(database_path())
+    csv_path = write_dataset_csv(service().document_rows())
     return FileResponse(csv_path, media_type="text/csv", filename="miage_theses.csv")
+
+
+@app.get("/api/graph/map")
+def graph_map(
+    thesis_limit: Annotated[int, Query(ge=10, le=120)] = 60,
+    concept_limit: Annotated[int, Query(ge=5, le=50)] = 24,
+) -> dict[str, Any]:
+    rows = service().document_rows()
+    return graph_map_payload(rows, backend=graph_backend(), thesis_limit=thesis_limit, concept_limit=concept_limit)
 
 
 @app.post("/api/rag/search")
@@ -283,7 +492,7 @@ async def upload_import(file: UploadFile = File(...)) -> dict:
     try:
         content = await file.read()
         enable_ocr = os.environ.get("MIAGE_IMPORT_OCR", "1").lower() not in {"0", "false", "no"}
-        return create_import_draft(file.filename or "upload.pdf", content, database_path(), enable_ocr=enable_ocr)
+        return create_import_draft(file.filename or "upload.pdf", content, graph_service=service(), enable_ocr=enable_ocr)
     except ImportWorkflowError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -295,7 +504,7 @@ async def upload_import_batch(files: list[UploadFile] = File(...)) -> dict:
     try:
         file_items = [(file.filename or "upload.pdf", await file.read()) for file in files]
         enable_ocr = os.environ.get("MIAGE_IMPORT_OCR", "1").lower() not in {"0", "false", "no"}
-        return create_import_drafts_batch(file_items, database_path(), enable_ocr=enable_ocr)
+        return create_import_drafts_batch(file_items, graph_service=service(), enable_ocr=enable_ocr)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Batch import failed: {exc}") from exc
 
@@ -303,7 +512,7 @@ async def upload_import_batch(files: list[UploadFile] = File(...)) -> dict:
 @app.get("/api/imports/{draft_id}")
 def import_draft(draft_id: str) -> dict:
     try:
-        return load_public_draft(draft_id)
+        return load_public_draft(draft_id, graph_service=service())
     except ImportWorkflowError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -312,7 +521,9 @@ def import_draft(draft_id: str) -> dict:
 def approve_import_draft(draft_id: str, approval: ImportApproval) -> dict:
     try:
         payload = approval.model_dump() if hasattr(approval, "model_dump") else approval.dict()
-        return approve_import(draft_id, payload, database_path())
+        result = approve_import(draft_id, payload, graph_service=service())
+        _RAG_SERVICES.clear()
+        return result
     except ImportWorkflowError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -322,7 +533,7 @@ def approve_import_draft(draft_id: str, approval: ImportApproval) -> dict:
 @app.post("/api/imports/{draft_id}/llm-suggestions")
 def import_llm_suggestions(draft_id: str, request: LLMSuggestionRequest) -> dict:
     try:
-        return generate_import_suggestions(draft_id, request.fields, model=request.model)
+        return generate_import_suggestions(draft_id, request.fields, model=request.model, graph_service=service())
     except LLMUnavailableError as exc:
         return {
             "status": "unavailable",
@@ -340,7 +551,7 @@ def import_llm_suggestions(draft_id: str, request: LLMSuggestionRequest) -> dict
 @app.delete("/api/imports/{draft_id}")
 def delete_import_draft(draft_id: str) -> dict:
     try:
-        return discard_import(draft_id)
+        return discard_import(draft_id, graph_service=service())
     except ImportWorkflowError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -348,3 +559,14 @@ def delete_import_draft(draft_id: str) -> dict:
 def validate_node_type(node_type: str) -> None:
     if node_type not in {"Concept", "Keyword", "UseCase", "Methodology", "Year", "MasterLevel", "Track"}:
         raise HTTPException(status_code=400, detail=f"Unsupported node type: {node_type}")
+
+
+def write_dataset_csv(rows: list[dict[str, Any]]) -> Path:
+    csv_path = processed_dir() / "theses.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=DOCUMENT_EXPORT_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({column: row.get(column, "") for column in DOCUMENT_EXPORT_COLUMNS})
+    return csv_path

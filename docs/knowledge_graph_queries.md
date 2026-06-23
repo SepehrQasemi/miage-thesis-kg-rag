@@ -1,126 +1,110 @@
 # Knowledge Graph Queries
 
-This document explains how to query the local Knowledge Graph after it has been built.
+## Query Layer
 
-The query layer reads from the SQLite graph tables:
+The application queries Neo4j through `Neo4jGraphQueryService`.
 
-- `graph_nodes`
-- `graph_edges`
+This same service is used by:
 
-It is intentionally local and free. It does not require Neo4j, an API key, or a cloud service.
+- Dashboard;
+- Knowledge Graph map;
+- Thesis Search;
+- Concepts;
+- thesis profiles;
+- Dataset export;
+- RAG source retrieval;
+- CLI query scripts.
 
-## Basic Commands
+## CLI Examples
 
-Show graph counts:
+Summary:
 
 ```powershell
 python scripts/query_knowledge_graph.py summary
 ```
 
-Show the most frequent concepts:
+Top concepts:
 
 ```powershell
-python scripts/query_knowledge_graph.py top --type Concept --limit 10
+python scripts/query_knowledge_graph.py top --type Concept --limit 20
 ```
 
-Show the most frequent use cases:
+Thesis profile:
 
 ```powershell
-python scripts/query_knowledge_graph.py top --type UseCase --limit 10
+python scripts/query_knowledge_graph.py profile thesis_0010
 ```
 
-## Thesis Profile
-
-Show the graph profile of one thesis:
+Similar theses:
 
 ```powershell
-python scripts/query_knowledge_graph.py profile thesis_0004
+python scripts/query_knowledge_graph.py similar thesis_0010 --limit 10
 ```
 
-This returns the thesis metadata and its connected concepts and keywords.
-
-## Similar Theses
-
-Find theses related to one thesis:
+Concept overview:
 
 ```powershell
-python scripts/query_knowledge_graph.py similar thesis_0006 --limit 10
+python scripts/query_knowledge_graph.py concept "intelligence artificielle"
 ```
 
-Similarity is based on shared normalized concepts. The `shared_concepts` column explains why two theses are considered related.
-
-## Concept Query
-
-Find theses connected to a concept:
+Filtered search:
 
 ```powershell
-python scripts/query_knowledge_graph.py concept "machine learning" --limit 10
+python scripts/query_knowledge_graph.py search --concept "sante" --methodology "classification" --match all
 ```
 
-This also shows other concepts that frequently appear with the selected concept.
-
-## Entity Query
-
-List theses connected to one entity node:
+Export query results:
 
 ```powershell
-python scripts/query_knowledge_graph.py entity --type Year --label 2024 --limit 20
-python scripts/query_knowledge_graph.py entity --type MasterLevel --label M2 --limit 20
-python scripts/query_knowledge_graph.py entity --type Track --label apprentissage --limit 20
+python scripts/query_knowledge_graph.py search --concept "cybersecurite" --csv output/cybersecurity.csv
 ```
 
-Supported entity types:
+## Web API
 
-- `Concept`
-- `Keyword`
-- `UseCase`
-- `Methodology`
-- `Year`
-- `MasterLevel`
-- `Track`
+Main graph-backed endpoints:
 
-## Multi-Filter Search
+- `GET /api/summary`
+- `GET /api/graph/map`
+- `GET /api/theses`
+- `GET /api/theses/{thesis_id}`
+- `GET /api/concepts`
+- `POST /api/rag/search`
+- `POST /api/rag/answer`
 
-Find theses that match all filters:
+## Search Semantics
+
+Graph search supports:
+
+- `concept`
+- `keyword`
+- `use_case`
+- `methodology`
+- `year`
+- `master_level`
+- `track`
+- `match=all`
+- `match=any`
+- `limit`
+- `offset`
+
+`match=all` requires all filters to match.
+
+`match=any` requires at least one filter to match and ranks by matched filter count and score.
+
+## Graph Map
+
+`GET /api/graph/map` returns a capped subgraph for browser rendering. This prevents large databases from rendering too many nodes at once.
+
+The full graph remains available in Neo4j and through CLI/API queries.
+
+## Dataset Export
+
+Use:
 
 ```powershell
-python scripts/query_knowledge_graph.py search --concept "machine learning" --concept sante --match all --limit 20
+python scripts/export_csv.py
 ```
 
-Find theses that match at least one filter:
+or download CSV from the `Dataset` page.
 
-```powershell
-python scripts/query_knowledge_graph.py search --concept "machine learning" --concept blockchain --match any --limit 20
-```
-
-Combine structural filters:
-
-```powershell
-python scripts/query_knowledge_graph.py search --concept "machine learning" --year 2024 --master-level M2 --track apprentissage --match all
-```
-
-## JSON and CSV Output
-
-Most commands support JSON output:
-
-```powershell
-python scripts/query_knowledge_graph.py similar thesis_0006 --json
-```
-
-Commands returning rows can also write CSV:
-
-```powershell
-python scripts/query_knowledge_graph.py similar thesis_0006 --csv data/reports/query_similar_thesis_0006.csv
-```
-
-## Why This Matters
-
-The query layer is the bridge between the graph construction phase and the future application.
-
-It already supports the main use cases needed for the next stages:
-
-- thesis recommendation;
-- concept-based search;
-- filtering by year, level, track, use case, and methodology;
-- structured retrieval for a future RAG pipeline;
-- backend logic for a future user interface.
+Both paths read active thesis rows from Neo4j.

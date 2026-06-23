@@ -1,18 +1,12 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
 import hashlib
-import json
 import math
 import re
 import unicodedata
-from pathlib import Path
 from typing import Any
 
-from common.db import connect, init_schema
-from common.paths import db_path
-from common.pipeline_outputs import active_documents
 from nlp.keyword_extractor import CONCEPT_SYNONYMS, STOPWORDS
 
 
@@ -246,103 +240,3 @@ def embed_document(row: dict[str, Any], dimensions: int = DEFAULT_DIMENSIONS) ->
 def embedding_hash(text: str, model: str, dimensions: int) -> str:
     payload = f"{model}|{dimensions}|{text}".encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
-
-
-def rebuild_embeddings(
-    database_path: Path | None = None,
-    model: str = DEFAULT_EMBEDDING_MODEL,
-    dimensions: int = DEFAULT_DIMENSIONS,
-) -> dict[str, Any]:
-    database = database_path or db_path()
-    rows = active_documents(database)
-    now = datetime.now().isoformat(timespec="seconds")
-    upserted = 0
-    skipped = 0
-    active_ids = {row["thesis_id"] for row in rows}
-    with connect(database) as conn:
-        init_schema(conn)
-        for row in rows:
-            text = build_embedding_text(row)
-            text_hash = embedding_hash(text, model, dimensions)
-            existing = conn.execute(
-                """
-                SELECT embedding_hash, embedding_model, embedding_dimensions
-                FROM document_embeddings
-                WHERE thesis_id = ?
-                """,
-                (row["thesis_id"],),
-            ).fetchone()
-            if (
-                existing
-                and existing["embedding_hash"] == text_hash
-                and existing["embedding_model"] == model
-                and int(existing["embedding_dimensions"]) == dimensions
-            ):
-                skipped += 1
-                continue
-            vector = embed_document(row, dimensions=dimensions)
-            conn.execute(
-                """
-                INSERT INTO document_embeddings (
-                    thesis_id, embedding_model, embedding_dimensions, embedding_text,
-                    embedding_vector_json, embedding_hash, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(thesis_id) DO UPDATE SET
-                    embedding_model=excluded.embedding_model,
-                    embedding_dimensions=excluded.embedding_dimensions,
-                    embedding_text=excluded.embedding_text,
-                    embedding_vector_json=excluded.embedding_vector_json,
-                    embedding_hash=excluded.embedding_hash,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    row["thesis_id"],
-                    model,
-                    dimensions,
-                    text,
-                    json.dumps(vector, separators=(",", ":")),
-                    text_hash,
-                    now,
-                ),
-            )
-            upserted += 1
-        if active_ids:
-            placeholders = ", ".join("?" for _ in active_ids)
-            conn.execute(
-                f"DELETE FROM document_embeddings WHERE thesis_id NOT IN ({placeholders})",
-                tuple(sorted(active_ids)),
-            )
-        else:
-            conn.execute("DELETE FROM document_embeddings")
-        conn.commit()
-        total = conn.execute("SELECT COUNT(*) AS count FROM document_embeddings").fetchone()["count"]
-    return {
-        "active_documents": len(rows),
-        "embedding_rows": total,
-        "upserted": upserted,
-        "skipped": skipped,
-        "model": model,
-        "dimensions": dimensions,
-    }
-
-
-def load_embedding_rows(database_path: Path | None = None, model: str = DEFAULT_EMBEDDING_MODEL) -> list[dict[str, Any]]:
-    database = database_path or db_path()
-    with connect(database) as conn:
-        init_schema(conn)
-        return [
-            dict(row)
-            for row in conn.execute(
-                """
-                SELECT d.thesis_id, d.file_name, d.year, d.title, d.master_level, d.track,
-                       d.abstract, d.keywords, d.concepts, d.use_case, d.methodology,
-                       e.embedding_model, e.embedding_dimensions, e.embedding_text, e.embedding_vector_json
-                FROM documents d
-                JOIN document_embeddings e ON e.thesis_id = d.thesis_id
-                WHERE d.status = 'active' AND e.embedding_model = ?
-                ORDER BY d.thesis_id
-                """,
-                (model,),
-            ).fetchall()
-        ]

@@ -7,9 +7,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from common.db import connect, init_schema
-from common.paths import db_path
+from common.pipeline_outputs import rebuild_graph_outputs_from_rows
 from extraction.field_extractor import confidence_score
+from graph.neo4j_store import Neo4jGraphQueryService
 
 
 DEFAULT_OVERRIDES = ROOT / "data" / "manual_overrides" / "theses_metadata.csv"
@@ -54,52 +54,59 @@ def main() -> None:
     args = parser.parse_args()
 
     override_path = Path(args.file)
-    applied = 0
-    with connect(db_path()) as conn:
-        init_schema(conn)
-        with override_path.open(encoding="utf-8-sig", newline="") as f:
-            for override in csv.DictReader(f):
-                thesis_id = (override.get("thesis_id") or "").strip()
-                if not thesis_id:
-                    continue
-                existing = conn.execute("SELECT * FROM documents WHERE thesis_id=?", (thesis_id,)).fetchone()
-                if not existing:
-                    print(f"Skipping unknown thesis_id: {thesis_id}")
-                    continue
-                row = dict(existing)
-                updates = {}
-                for field in ["title", "master_level", "track"]:
-                    value = (override.get(field) or "").strip()
-                    if value:
-                        row[field] = value
-                        updates[field] = value
-                year = parse_year(override.get("year") or "")
-                if year:
-                    row["year"] = year
-                    updates["year"] = year
-                if not updates:
-                    continue
+    graph_service = Neo4jGraphQueryService()
+    graph_service.verify_connectivity()
+    rows = graph_service.document_rows()
+    rows_by_id = {str(row.get("thesis_id")): row for row in rows}
 
-                confidence, needs_review, missing_notes = recompute_review(row)
-                source_note = (override.get("notes") or "manual_override").strip()
-                previous_tags = [
-                    part.strip()
-                    for part in (existing["extraction_notes"] or "").split(";")
-                    if part.strip().startswith(("llm_reviewed:", "title_repaired:", "ocr_pages:"))
-                ]
-                note_parts = [missing_notes, *previous_tags, source_note]
-                updates.update(
-                    {
-                        "extraction_confidence": confidence,
-                        "needs_review": needs_review,
-                        "extraction_notes": "; ".join(part for part in note_parts if part),
-                        "updated_at": datetime.now().isoformat(timespec="seconds"),
-                    }
-                )
-                set_clause = ", ".join(f"{key}=?" for key in updates)
-                conn.execute(f"UPDATE documents SET {set_clause} WHERE thesis_id=?", [*updates.values(), thesis_id])
-                applied += 1
-        conn.commit()
+    applied = 0
+    with override_path.open(encoding="utf-8-sig", newline="") as f:
+        for override in csv.DictReader(f):
+            thesis_id = (override.get("thesis_id") or "").strip()
+            if not thesis_id:
+                continue
+            existing = rows_by_id.get(thesis_id)
+            if not existing:
+                print(f"Skipping unknown thesis_id: {thesis_id}")
+                continue
+            row = dict(existing)
+            updates = {}
+            for field in ["title", "master_level", "track"]:
+                value = (override.get(field) or "").strip()
+                if value:
+                    row[field] = value
+                    updates[field] = value
+            year = parse_year(override.get("year") or "")
+            if year:
+                row["year"] = year
+                updates["year"] = year
+            if not updates:
+                continue
+
+            confidence, needs_review, missing_notes = recompute_review(row)
+            source_note = (override.get("notes") or "manual_override").strip()
+            previous_tags = [
+                part.strip()
+                for part in (existing.get("extraction_notes") or "").split(";")
+                if part.strip().startswith(("llm_reviewed:", "title_repaired:", "ocr_pages:"))
+            ]
+            note_parts = [missing_notes, *previous_tags, source_note]
+            row.update(
+                {
+                    **updates,
+                    "extraction_confidence": confidence,
+                    "needs_review": needs_review,
+                    "extraction_notes": "; ".join(part for part in note_parts if part),
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                }
+            )
+            rows_by_id[thesis_id] = row
+            applied += 1
+
+    if applied:
+        updated_rows = sorted(rows_by_id.values(), key=lambda item: str(item.get("thesis_id") or ""))
+        graph_service.replace_with_documents(updated_rows)
+        rebuild_graph_outputs_from_rows(graph_service.document_rows())
 
     print(f"Manual overrides applied: {applied}")
 

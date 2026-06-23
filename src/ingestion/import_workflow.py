@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import json
+import os
 import re
 import shutil
 from datetime import datetime
@@ -9,9 +9,8 @@ from pathlib import Path
 from secrets import token_hex
 from typing import Any
 
-from common.db import connect, init_schema
-from common.paths import db_path, project_root, raw_pdf_dir, staging_dir
-from common.pipeline_outputs import rebuild_graph_outputs
+from common.paths import project_root, raw_pdf_dir, staging_dir
+from common.pipeline_outputs import rebuild_graph_outputs_from_rows
 from extraction.field_extractor import (
     classify_methodology,
     classify_use_case,
@@ -23,12 +22,13 @@ from extraction.field_extractor import (
 )
 from extraction.pdf_reader import read_pdf_text
 from extraction.section_detector import extract_sections
+from graph.neo4j_store import Neo4jGraphQueryService
 from nlp.keyword_extractor import extract_keywords_for_corpus, normalize_concepts
-from rag.embeddings import rebuild_embeddings
 
 
 ALLOWED_MASTER_LEVELS = {"M1", "M2", "N/A"}
 ALLOWED_TRACKS = {"apprentissage", "classique", "N/A"}
+DEFAULT_MAX_UPLOAD_MB = 100
 
 
 class ImportWorkflowError(ValueError):
@@ -38,19 +38,18 @@ class ImportWorkflowError(ValueError):
 def create_import_draft(
     file_name: str,
     content: bytes,
-    database_path: Path | None = None,
+    graph_service: Neo4jGraphQueryService | None = None,
     enable_ocr: bool = True,
     reserved_ids: set[str] | None = None,
 ) -> dict[str, Any]:
+    graph_service = graph_service or Neo4jGraphQueryService()
     clean_name = safe_filename(file_name)
     if not clean_name.lower().endswith(".pdf"):
         raise ImportWorkflowError("Only PDF files can be imported.")
-    if not content:
-        raise ImportWorkflowError("The uploaded PDF is empty.")
+    validate_pdf_content(content)
 
-    database = database_path or db_path()
     digest = hashlib.sha256(content).hexdigest()
-    duplicate = find_duplicate_by_sha256(digest, database)
+    duplicate = graph_service.find_duplicate_by_sha256(digest)
     if duplicate:
         return {
             "status": "duplicate",
@@ -70,11 +69,11 @@ def create_import_draft(
             staged_path=staged_path,
             original_file_name=clean_name,
             sha256=digest,
-            database_path=database,
+            graph_service=graph_service,
             enable_ocr=enable_ocr,
             reserved_ids=reserved_ids,
         )
-        save_draft(draft)
+        save_draft(draft, graph_service)
     except Exception:
         staged_path.unlink(missing_ok=True)
         raise
@@ -88,11 +87,11 @@ def create_import_draft(
 
 def create_import_drafts_batch(
     file_items: list[tuple[str, bytes]],
-    database_path: Path | None = None,
+    graph_service: Neo4jGraphQueryService | None = None,
     enable_ocr: bool = True,
 ) -> dict[str, Any]:
-    database = database_path or db_path()
-    reserved_ids = set(open_draft_thesis_ids())
+    graph_service = graph_service or Neo4jGraphQueryService()
+    reserved_ids = set(open_draft_thesis_ids(graph_service))
     seen_hashes: dict[str, dict[str, Any]] = {}
     results = []
 
@@ -101,8 +100,7 @@ def create_import_drafts_batch(
         try:
             if not clean_name.lower().endswith(".pdf"):
                 raise ImportWorkflowError("Only PDF files can be imported.")
-            if not content:
-                raise ImportWorkflowError("The uploaded PDF is empty.")
+            validate_pdf_content(content)
 
             digest = hashlib.sha256(content).hexdigest()
             if digest in seen_hashes:
@@ -120,7 +118,7 @@ def create_import_drafts_batch(
             result = create_import_draft(
                 clean_name,
                 content,
-                database,
+                graph_service,
                 enable_ocr=enable_ocr,
                 reserved_ids=reserved_ids,
             )
@@ -165,7 +163,7 @@ def extract_draft_metadata(
     staged_path: Path,
     original_file_name: str,
     sha256: str,
-    database_path: Path,
+    graph_service: Neo4jGraphQueryService,
     enable_ocr: bool = True,
     reserved_ids: set[str] | None = None,
 ) -> dict[str, Any]:
@@ -206,7 +204,7 @@ def extract_draft_metadata(
     concepts = normalize_concepts(keyword_text, keywords, limit=8)
 
     fields = {
-        "thesis_id": next_thesis_id(database_path, reserved_ids=reserved_ids),
+        "thesis_id": next_thesis_id(graph_service, reserved_ids=reserved_ids),
         "title": title,
         "year": str(year) if year else "",
         "master_level": master_level,
@@ -240,10 +238,10 @@ def extract_draft_metadata(
 def approve_import(
     draft_id: str,
     fields: dict[str, Any],
-    database_path: Path | None = None,
+    graph_service: Neo4jGraphQueryService | None = None,
 ) -> dict[str, Any]:
-    database = database_path or db_path()
-    draft = load_draft(draft_id)
+    graph_service = graph_service or Neo4jGraphQueryService()
+    draft = load_draft(draft_id, graph_service)
     if draft.get("status") != "draft":
         raise ImportWorkflowError("This draft is not available for approval.")
 
@@ -258,41 +256,31 @@ def approve_import(
     if destination.exists():
         raise ImportWorkflowError(f"Target PDF already exists: {final_file_name}")
 
-    with connect(database) as conn:
-        init_schema(conn)
-        if document_exists(conn, reviewed["thesis_id"]):
-            raise ImportWorkflowError(f"Thesis ID already exists: {reviewed['thesis_id']}")
-        duplicate = conn.execute(
-            "SELECT thesis_id, title, file_name FROM documents WHERE sha256 = ? AND status = 'active'",
-            (draft["sha256"],),
-        ).fetchone()
-        if duplicate:
-            raise ImportWorkflowError(f"Duplicate PDF already exists as {duplicate['thesis_id']}.")
+    if graph_service.thesis_id_exists(reviewed["thesis_id"]):
+        raise ImportWorkflowError(f"Thesis ID already exists: {reviewed['thesis_id']}")
+    duplicate = graph_service.find_duplicate_by_sha256(draft["sha256"])
+    if duplicate:
+        raise ImportWorkflowError(f"Duplicate PDF already exists as {duplicate['thesis_id']}.")
 
+    previous_rows = graph_service.document_rows()
     shutil.copy2(staged_path, destination)
     record = approved_record(draft, reviewed, destination, final_file_name)
-    document_inserted = False
     try:
-        with connect(database) as conn:
-            init_schema(conn)
-            insert_document(conn, record)
-            conn.commit()
-            document_inserted = True
-        outputs = rebuild_graph_outputs(database)
-        embedding_outputs = rebuild_embeddings(database)
+        graph_outputs = graph_service.add_document(record)
+        output_files = rebuild_graph_outputs_from_rows(graph_service.document_rows())
     except Exception:
-        if document_inserted:
-            with connect(database) as conn:
-                init_schema(conn)
-                conn.execute("DELETE FROM documents WHERE thesis_id = ?", (reviewed["thesis_id"],))
-                conn.commit()
+        try:
+            graph_service.replace_with_documents(previous_rows)
+            rebuild_graph_outputs_from_rows(previous_rows)
+        except Exception:
+            pass
         destination.unlink(missing_ok=True)
         raise
 
     draft["status"] = "approved"
     draft["approved_at"] = datetime.now().isoformat(timespec="seconds")
     draft["approved_thesis_id"] = reviewed["thesis_id"]
-    save_draft(draft)
+    save_draft(draft, graph_service)
     staged_path.unlink(missing_ok=True)
 
     return {
@@ -300,17 +288,22 @@ def approve_import(
         "thesis_id": reviewed["thesis_id"],
         "file_name": final_file_name,
         "title": reviewed["title"],
-        "outputs": outputs,
-        "embedding_outputs": embedding_outputs,
+        "outputs": {**graph_outputs, **output_files},
+        "embedding_outputs": {
+            "backend": "neo4j",
+            "embedding_source": "in_memory_graph_rows",
+            "active_documents": len(graph_service.document_rows()),
+        },
     }
 
 
-def discard_import(draft_id: str) -> dict[str, str]:
-    draft = load_draft(draft_id)
+def discard_import(draft_id: str, graph_service: Neo4jGraphQueryService | None = None) -> dict[str, str]:
+    graph_service = graph_service or Neo4jGraphQueryService()
+    draft = load_draft(draft_id, graph_service)
     staged_path = Path(str(draft.get("staged_file_path", "")))
     if staged_path.exists():
         staged_path.unlink()
-    draft_path(draft_id).unlink(missing_ok=True)
+    graph_service.delete_import_draft(draft_id)
     return {"status": "discarded", "draft_id": draft_id}
 
 
@@ -336,8 +329,9 @@ def public_draft(draft: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def load_public_draft(draft_id: str) -> dict[str, Any]:
-    return public_draft(load_draft(draft_id))
+def load_public_draft(draft_id: str, graph_service: Neo4jGraphQueryService | None = None) -> dict[str, Any]:
+    graph_service = graph_service or Neo4jGraphQueryService()
+    return public_draft(load_draft(draft_id, graph_service))
 
 
 def approved_record(draft: dict[str, Any], fields: dict[str, str], pdf_path: Path, file_name: str) -> dict[str, Any]:
@@ -372,40 +366,6 @@ def approved_record(draft: dict[str, Any], fields: dict[str, str], pdf_path: Pat
     }
 
 
-def insert_document(conn, record: dict[str, Any]) -> None:
-    fields = [
-        "thesis_id",
-        "file_name",
-        "file_path",
-        "sha256",
-        "pages_count",
-        "cover_text",
-        "abstract",
-        "introduction",
-        "conclusion",
-        "year",
-        "title",
-        "master_level",
-        "track",
-        "keywords",
-        "concepts",
-        "use_case",
-        "methodology",
-        "extraction_confidence",
-        "needs_review",
-        "status",
-        "extraction_notes",
-        "processed_at",
-    ]
-    conn.execute(
-        f"""
-        INSERT INTO documents ({", ".join(fields)})
-        VALUES ({", ".join("?" for _ in fields)})
-        """,
-        [record.get(field) for field in fields],
-    )
-
-
 def normalize_review_fields(fields: dict[str, Any]) -> dict[str, str]:
     normalized = {
         "thesis_id": clean_thesis_id(fields.get("thesis_id")),
@@ -430,85 +390,38 @@ def normalize_review_fields(fields: dict[str, Any]) -> dict[str, str]:
     return normalized
 
 
-def find_duplicate_by_sha256(sha256: str, database_path: Path) -> dict[str, Any] | None:
-    with connect(database_path) as conn:
-        init_schema(conn)
-        row = conn.execute(
-            """
-            SELECT thesis_id, title, file_name, year, master_level
-            FROM documents
-            WHERE sha256 = ? AND status = 'active'
-            """,
-            (sha256,),
-        ).fetchone()
-    return dict(row) if row else None
-
-
-def next_thesis_id(database_path: Path, reserved_ids: set[str] | None = None) -> str:
+def next_thesis_id(graph_service: Neo4jGraphQueryService, reserved_ids: set[str] | None = None) -> str:
     max_number = 0
-    with connect(database_path) as conn:
-        init_schema(conn)
-        rows = conn.execute("SELECT thesis_id FROM documents").fetchall()
-    for row in rows:
-        match = re.fullmatch(r"thesis_(\d+)", str(row["thesis_id"]))
+    for row in graph_service.document_rows():
+        match = re.fullmatch(r"thesis_(\d+)", str(row.get("thesis_id") or ""))
         if match:
             max_number = max(max_number, int(match.group(1)))
     for pdf_path in raw_pdf_dir().glob("thesis_*.pdf"):
         match = re.match(r"thesis_(\d+)", pdf_path.stem)
         if match:
             max_number = max(max_number, int(match.group(1)))
-    for thesis_id in set(open_draft_thesis_ids()) | set(reserved_ids or set()):
+    for thesis_id in set(open_draft_thesis_ids(graph_service)) | set(reserved_ids or set()):
         match = re.fullmatch(r"thesis_(\d+)", str(thesis_id))
         if match:
             max_number = max(max_number, int(match.group(1)))
     return f"thesis_{max_number + 1:04d}"
 
 
-def open_draft_thesis_ids() -> set[str]:
-    directory = staging_dir() / "imports" / "reviews"
-    if not directory.exists():
-        return set()
-    thesis_ids = set()
-    for path in directory.glob("import_*.json"):
-        try:
-            with path.open(encoding="utf-8") as f:
-                draft = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            continue
-        if draft.get("status") != "draft":
-            continue
-        thesis_id = str(draft.get("fields", {}).get("thesis_id") or "")
-        if thesis_id:
-            thesis_ids.add(thesis_id)
-    return thesis_ids
+def open_draft_thesis_ids(graph_service: Neo4jGraphQueryService) -> set[str]:
+    return graph_service.open_import_draft_thesis_ids()
 
 
-def document_exists(conn, thesis_id: str) -> bool:
-    row = conn.execute("SELECT 1 FROM documents WHERE thesis_id = ?", (thesis_id,)).fetchone()
-    return row is not None
+def save_draft(draft: dict[str, Any], graph_service: Neo4jGraphQueryService) -> None:
+    graph_service.save_import_draft(draft)
 
 
-def draft_path(draft_id: str) -> Path:
+def load_draft(draft_id: str, graph_service: Neo4jGraphQueryService) -> dict[str, Any]:
     if not re.fullmatch(r"import_[A-Za-z0-9_]+", draft_id):
         raise ImportWorkflowError("Invalid draft ID.")
-    directory = staging_dir() / "imports" / "reviews"
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory / f"{draft_id}.json"
-
-
-def save_draft(draft: dict[str, Any]) -> None:
-    path = draft_path(draft["draft_id"])
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(draft, f, ensure_ascii=False, indent=2)
-        f.write("\n")
-
-
-def load_draft(draft_id: str) -> dict[str, Any]:
-    path = draft_path(draft_id)
-    if not path.exists():
-        raise ImportWorkflowError(f"Unknown import draft: {draft_id}")
-    with path.open(encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        return graph_service.load_import_draft(draft_id)
+    except LookupError as exc:
+        raise ImportWorkflowError(str(exc)) from exc
 
 
 def new_draft_id() -> str:
@@ -521,6 +434,24 @@ def safe_filename(file_name: str) -> str:
     stem = re.sub(r"[^A-Za-z0-9._ -]+", "_", name)
     stem = re.sub(r"\s+", "_", stem).strip("._- ")
     return stem or "upload.pdf"
+
+
+def max_upload_bytes() -> int:
+    raw_value = os.environ.get("MIAGE_MAX_UPLOAD_MB", str(DEFAULT_MAX_UPLOAD_MB))
+    try:
+        megabytes = int(str(raw_value).strip())
+    except ValueError:
+        megabytes = DEFAULT_MAX_UPLOAD_MB
+    return max(1, megabytes) * 1024 * 1024
+
+
+def validate_pdf_content(content: bytes) -> None:
+    if not content:
+        raise ImportWorkflowError("The uploaded PDF is empty.")
+    if len(content) > max_upload_bytes():
+        raise ImportWorkflowError(f"The uploaded PDF is larger than {max_upload_bytes() // (1024 * 1024)} MB.")
+    if not content.lstrip().startswith(b"%PDF-"):
+        raise ImportWorkflowError("The uploaded file is not a valid PDF document.")
 
 
 def final_pdf_filename(thesis_id: str, original_file_name: str) -> str:

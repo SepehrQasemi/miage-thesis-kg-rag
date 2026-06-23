@@ -36,10 +36,6 @@ def data_dir() -> Path:
     return _path_from_env("MIAGE_DATA_DIR", project_root() / "data")
 
 
-def db_path() -> Path:
-    return _path_from_env("MIAGE_APP_DB", data_dir() / "app.sqlite")
-
-
 def raw_pdf_dir() -> Path:
     return _path_from_env("MIAGE_RAW_PDF_DIR", data_dir() / "raw" / "theses_pdf")
 

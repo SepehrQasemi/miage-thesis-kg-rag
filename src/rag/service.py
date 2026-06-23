@@ -1,25 +1,22 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import re
-from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import urllib.error
 import urllib.request
 
-from common.db import connect, init_schema
-from common.paths import db_path
 from nlp.keyword_extractor import STOPWORDS
 from rag.embeddings import (
     DEFAULT_DIMENSIONS,
     DEFAULT_EMBEDDING_MODEL,
+    embed_document,
     embed_text,
     feature_counts,
-    load_embedding_rows,
     normalize_text,
-    rebuild_embeddings,
     row_feature_counts,
     semantic_expansions,
     split_terms,
@@ -175,6 +172,13 @@ BROAD_DOMAIN_TOKENS = {
 
 DOMAIN_PROFILES = {
     "medical": {
+        "broad_query_terms": [
+            "medical",
+            "medicine",
+            "health",
+            "healthcare",
+            "sante",
+        ],
         "query_terms": [
             "medical",
             "medicine",
@@ -212,6 +216,99 @@ DOMAIN_PROFILES = {
             "imagerie medicale",
             "diabete",
             "alzheimer",
+        ],
+    },
+    "finance": {
+        "broad_query_terms": [
+            "finance",
+            "financial",
+            "financier",
+            "financiere",
+            "market",
+            "marche",
+        ],
+        "query_terms": [
+            "finance",
+            "financial",
+            "financier",
+            "financiere",
+            "crypto",
+            "cryptocurrency",
+            "market",
+            "marche",
+            "trading",
+            "fraud",
+            "fraude",
+            "risk",
+            "risque",
+        ],
+        "row_terms": [
+            "finance",
+            "financier",
+            "financiere",
+            "marche crypto",
+            "crypto",
+            "cryptocurrency",
+            "trading",
+            "fraude",
+            "risque financier",
+            "transactions",
+        ],
+    },
+    "cybersecurity": {
+        "broad_query_terms": [
+            "cybersecurity",
+            "cybersecurite",
+            "security",
+            "securite",
+        ],
+        "query_terms": [
+            "cybersecurity",
+            "cybersecurite",
+            "security",
+            "securite",
+            "attack",
+            "attacks",
+            "attaque",
+            "attaques",
+            "intrusion",
+            "ddos",
+        ],
+        "row_terms": [
+            "cybersecurite",
+            "cybersecurity",
+            "securite",
+            "security",
+            "detection d attaques",
+            "attaques",
+            "intrusion",
+            "ddos",
+            "vulnerabilite",
+            "vulnerabilites",
+        ],
+    },
+    "gaming": {
+        "broad_query_terms": [
+            "game",
+            "gaming",
+            "jeu",
+            "jeux",
+        ],
+        "query_terms": [
+            "game",
+            "gaming",
+            "jeu",
+            "jeux",
+            "league of legends",
+            "league legends",
+        ],
+        "row_terms": [
+            "game",
+            "gaming",
+            "jeu",
+            "jeux",
+            "league of legends",
+            "league legends",
         ],
     },
 }
@@ -404,6 +501,17 @@ def requires_software_quality_context(profile: dict[str, Any]) -> bool:
     return "software" in original_tokens and bool({"quality", "control"} & original_tokens)
 
 
+def is_generic_cybersecurity_clue(clue_tokens: set[str]) -> bool:
+    return bool(clue_tokens & {"cybersecurite", "cybersecurity", "securite", "security"}) or clue_tokens <= {
+        "attaque",
+        "attaques",
+        "attack",
+        "attacks",
+        "detection",
+        "intrusion",
+    }
+
+
 def query_anchor_clues(profile: dict[str, Any]) -> list[tuple[str, set[str]]]:
     anchors = query_anchor_tokens(profile)
     if not anchors:
@@ -429,11 +537,15 @@ def query_anchor_clues(profile: dict[str, Any]) -> list[tuple[str, set[str]]]:
                 continue
             if len(clue_specific) > 1 and len(expansion_specific) < min(2, len(clue_specific)):
                 continue
+            if "ddos" in anchors and is_generic_cybersecurity_clue(expansion_specific):
+                continue
             clues_by_text.setdefault(expansion_norm, expansion_tokens)
     for token in anchors:
         for clue in [token, *semantic_expansions(token)]:
             clue_norm = normalize_text(clue)
             clue_tokens = meaningful_tokens(clue_norm)
+            if "ddos" in anchors and is_generic_cybersecurity_clue(anchorable_tokens(clue_tokens)):
+                continue
             if clue_norm and clue_tokens:
                 clues_by_text.setdefault(clue_norm, clue_tokens)
     if requires_software_quality_context(profile):
@@ -456,6 +568,16 @@ def matched_specific_terms(matches: list[str], specific_tokens: set[str]) -> boo
     return False
 
 
+def domain_fallback_allowed(specific_tokens: set[str], domain_filters: list[str]) -> bool:
+    if not domain_filters or not specific_tokens:
+        return False
+    broad_tokens: set[str] = set()
+    for domain in domain_filters:
+        for term in DOMAIN_PROFILES[domain]["broad_query_terms"]:
+            broad_tokens.update(meaningful_tokens(term))
+    return specific_tokens.issubset(broad_tokens)
+
+
 def has_relevance_evidence(
     specific_tokens: set[str],
     anchor_clues: list[tuple[str, set[str]]],
@@ -469,14 +591,22 @@ def has_relevance_evidence(
             for _field, _weight, field_norm, field_tokens in row_profile["evidence_fields"]:
                 if phrase_matches(clue, clue_tokens, field_norm, field_tokens):
                     return True
-        return bool(domain_filters and len(row_domains) == len(domain_filters))
+        return bool(
+            domain_filters
+            and len(row_domains) == len(domain_filters)
+            and domain_fallback_allowed(specific_tokens, domain_filters)
+        )
     if not specific_tokens:
         return True
     if specific_tokens & row_profile["row_tokens"]:
         return True
     if matched_specific_terms(matches, specific_tokens):
         return True
-    return bool(domain_filters and len(row_domains) == len(domain_filters))
+    return bool(
+        domain_filters
+        and len(row_domains) == len(domain_filters)
+        and domain_fallback_allowed(specific_tokens, domain_filters)
+    )
 
 
 def domain_terms_match(terms: list[str], normalized: str, tokens: set[str]) -> bool:
@@ -516,14 +646,14 @@ def matching_row_domains(row_profile: dict[str, Any], domains: list[str]) -> lis
 def phrase_matches(clue: str, clue_tokens: set[str], field_norm: str, field_tokens: set[str]) -> bool:
     if not clue_tokens:
         return False
+    if len(clue_tokens) == 1:
+        return next(iter(clue_tokens)) in field_tokens
     if clue in field_norm:
         return True
     clue_compact = clue.replace(" ", "")
     field_compact = field_norm.replace(" ", "")
     if clue_compact and len(clue_compact) >= 3 and clue_compact in field_compact:
         return True
-    if len(clue_tokens) == 1:
-        return next(iter(clue_tokens)) in field_tokens
     return clue_tokens.issubset(field_tokens)
 
 
@@ -745,31 +875,18 @@ def shared_terms(
     return matches[:8]
 
 
-def ensure_embedding_count(database: Path, model: str, dimensions: int) -> None:
-    with connect(database) as conn:
-        init_schema(conn)
-        counts = conn.execute(
-            """
-            SELECT
-                (SELECT COUNT(*) FROM documents WHERE status = 'active') AS active_count,
-                (SELECT COUNT(*) FROM document_embeddings WHERE embedding_model = ?) AS embedding_count
-            """,
-            (model,),
-        ).fetchone()
-    if counts["active_count"] != counts["embedding_count"]:
-        rebuild_embeddings(database, model=model, dimensions=dimensions)
-
-
 class RagService:
     def __init__(
         self,
-        database_path: Path | None = None,
         model: str = DEFAULT_EMBEDDING_MODEL,
         dimensions: int = DEFAULT_DIMENSIONS,
+        rows_provider: Callable[[], list[dict[str, Any]]] | None = None,
     ):
-        self.database_path = database_path or db_path()
+        if rows_provider is None:
+            raise ValueError("RagService requires a graph-backed rows_provider.")
         self.model = model
         self.dimensions = dimensions
+        self.rows_provider = rows_provider
         self._rows_cache: list[dict[str, Any]] | None = None
         self._rows_signature: tuple[int, str, str, str, str] | None = None
         self._feature_cache: dict[str, dict[str, float]] = {}
@@ -777,50 +894,52 @@ class RagService:
         self._search_profile_cache: dict[str, dict[str, Any]] = {}
 
     def build_embeddings(self) -> dict[str, Any]:
-        result = rebuild_embeddings(self.database_path, model=self.model, dimensions=self.dimensions)
-        self._rows_cache = None
-        self._rows_signature = None
+        rows = self._embedding_rows()
         self._feature_cache = {}
         self._vector_cache = {}
         self._search_profile_cache = {}
-        return result
-
-    def _embedding_signature(self) -> tuple[int, str, str, str, str]:
-        with connect(self.database_path) as conn:
-            init_schema(conn)
-            row = conn.execute(
-                """
-                SELECT
-                    COUNT(*) AS count,
-                    COALESCE(MAX(e.updated_at), '') AS max_embedding_updated_at,
-                    COALESCE(MAX(d.updated_at), '') AS max_document_updated_at,
-                    COALESCE(MIN(e.embedding_hash), '') AS min_embedding_hash,
-                    COALESCE(MAX(e.embedding_hash), '') AS max_embedding_hash
-                FROM documents d
-                JOIN document_embeddings e ON e.thesis_id = d.thesis_id
-                WHERE d.status = 'active'
-                  AND e.embedding_model = ?
-                  AND e.embedding_dimensions = ?
-                """,
-                (self.model, self.dimensions),
-            ).fetchone()
-        return (
-            int(row["count"] or 0),
-            row["max_embedding_updated_at"] or "",
-            row["max_document_updated_at"] or "",
-            row["min_embedding_hash"] or "",
-            row["max_embedding_hash"] or "",
-        )
+        return {
+            "backend": "graph",
+            "active_documents": len(rows),
+            "embedding_rows": len(rows),
+            "embedding_model": self.model,
+            "embedding_dimensions": self.dimensions,
+        }
 
     def _embedding_rows(self) -> list[dict[str, Any]]:
-        signature = self._embedding_signature()
+        rows = [
+            dict(row)
+            for row in self.rows_provider()
+            if str(row.get("status") or "active") == "active"
+        ]
+        signature = self._provider_signature(rows)
         if self._rows_cache is None or signature != self._rows_signature:
-            self._rows_cache = load_embedding_rows(self.database_path, model=self.model)
+            self._rows_cache = []
+            for row in rows:
+                row_copy = dict(row)
+                row_copy["embedding_vector_json"] = json.dumps(embed_document(row_copy, dimensions=self.dimensions))
+                self._rows_cache.append(row_copy)
             self._rows_signature = signature
             self._feature_cache = {}
             self._vector_cache = {}
             self._search_profile_cache = {}
         return self._rows_cache
+
+    def _provider_signature(self, rows: list[dict[str, Any]]) -> tuple[int, str, str, str, str]:
+        payload = [
+            {
+                "thesis_id": row.get("thesis_id"),
+                "updated_at": row.get("updated_at"),
+                "title": row.get("title"),
+                "concepts": row.get("concepts"),
+                "keywords": row.get("keywords"),
+                "use_case": row.get("use_case"),
+                "methodology": row.get("methodology"),
+            }
+            for row in sorted(rows, key=lambda item: str(item.get("thesis_id") or ""))
+        ]
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        return (len(rows), digest, self.model, str(self.dimensions), "graph-provider")
 
     def _row_features(self, row: dict[str, Any]) -> dict[str, float]:
         thesis_id = row["thesis_id"]
@@ -847,7 +966,6 @@ class RagService:
         top_k = max(1, min(int(top_k or 5), 20))
         offset = max(0, int(offset or 0))
         min_score = configured_min_score() if min_score is None else max(0.0, float(min_score))
-        ensure_embedding_count(self.database_path, self.model, self.dimensions)
         profile = question_profile(question)
         specific_tokens = specific_query_tokens(profile)
         anchor_clues = query_anchor_clues(profile)

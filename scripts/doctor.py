@@ -1,7 +1,6 @@
 import importlib.util
 import json
 import os
-import sqlite3
 import sys
 import urllib.error
 import urllib.request
@@ -12,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
-from common.paths import db_path, graph_dir, load_env_file, raw_pdf_dir
+from common.paths import graph_dir, load_env_file, raw_pdf_dir
 
 
 REQUIRED_IMPORTS = {
@@ -26,6 +25,7 @@ REQUIRED_IMPORTS = {
     "yaml": "PyYAML",
     "playwright": "playwright",
     "multipart": "python-multipart",
+    "neo4j": "neo4j",
 }
 
 
@@ -59,33 +59,6 @@ def check_imports() -> bool:
             fail(f"Missing dependency: {package}")
             good = False
     return good
-
-
-def check_database() -> bool:
-    database = db_path()
-    if not database.exists():
-        fail(f"Database missing: {database}")
-        return False
-    try:
-        with sqlite3.connect(database) as conn:
-            tables = {
-                row[0]
-                for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-            }
-            required = {"documents", "graph_nodes", "graph_edges", "document_embeddings"}
-            missing = required - tables
-            if missing:
-                fail(f"Database schema missing tables: {', '.join(sorted(missing))}")
-                return False
-            doc_count = conn.execute("SELECT COUNT(*) FROM documents WHERE status = 'active'").fetchone()[0]
-            embedding_count = conn.execute("SELECT COUNT(*) FROM document_embeddings").fetchone()[0]
-        ok(f"Database schema ready; active documents: {doc_count}; embeddings: {embedding_count}")
-        if doc_count and embedding_count != doc_count:
-            warn("Embedding count does not match active documents. Run: python scripts/build_embeddings.py")
-        return True
-    except sqlite3.Error as exc:
-        fail(f"Database error: {exc}")
-        return False
 
 
 def check_files() -> bool:
@@ -127,12 +100,28 @@ def check_ollama() -> None:
     warn("Ollama API not reachable. LLM suggestions are optional; manual import review still works.")
 
 
+def check_neo4j() -> bool:
+    load_env_file()
+    try:
+        from graph.neo4j_store import Neo4jGraphQueryService
+
+        service = Neo4jGraphQueryService()
+        service.verify_connectivity()
+        service.ensure_schema()
+        summary = service.summary()
+        ok(f"Neo4j reachable; graph nodes: {summary['nodes_total']}; relationships: {summary['edges_total']}")
+        return True
+    except Exception as exc:
+        fail(f"Neo4j check failed: {exc}")
+        return False
+
+
 def main() -> None:
     print("MIAGE Thesis Knowledge Graph - environment doctor\n")
     checks = [
         check_python(),
         check_imports(),
-        check_database(),
+        check_neo4j(),
         check_files(),
     ]
     check_ollama()

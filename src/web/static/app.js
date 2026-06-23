@@ -22,15 +22,43 @@ const state = {
   ragHasNext: false,
   ragQuestion: "",
   ragAllResults: false,
+  graphMap: null,
+  graphBusy: false,
+  selectedGraphNodeId: null,
+  graphAnimationFrame: null,
 };
 
 const viewTitles = {
   dashboard: ["Dashboard", "Overview of the extracted thesis graph."],
+  graph: ["Knowledge Graph", "Explore how theses connect to concepts, use cases, methods, years, levels, and tracks."],
   search: ["Thesis Search", "Search and filter thesis metadata through graph relations."],
   concepts: ["Concepts", "Explore frequent concepts and their connected theses."],
   dataset: ["Dataset CSV", "View every extracted thesis row in one table."],
   rag: ["Ask / RAG", "Ask questions over local thesis metadata and cited sources."],
   import: ["Import PDFs", "Add one or more theses through extraction, review, and approval."],
+  help: ["Help", "Use the app safely and understand the main workflows."],
+};
+
+const graphTypeColors = {
+  Thesis: "#1d6f8f",
+  Concept: "#d8643f",
+  Keyword: "#7a8797",
+  UseCase: "#247a5a",
+  Methodology: "#7a5fb5",
+  Year: "#a67c00",
+  MasterLevel: "#3d647d",
+  Track: "#0f766e",
+};
+
+const graphTypeLabels = {
+  Thesis: "Thesis",
+  Concept: "Concept",
+  Keyword: "Keyword",
+  UseCase: "Use case",
+  Methodology: "Methodology",
+  Year: "Year",
+  MasterLevel: "Level",
+  Track: "Track",
 };
 
 const api = {
@@ -149,6 +177,9 @@ function bindControls() {
   qs("#rag-show-all").addEventListener("change", syncRagControls);
   qs("#rag-previous-page-button").addEventListener("click", () => loadRagSourcesPage(state.ragPage - 1));
   qs("#rag-next-page-button").addEventListener("click", () => loadRagSourcesPage(state.ragPage + 1));
+  qs("#graph-reload-button").addEventListener("click", loadGraphMap);
+  qs("#graph-thesis-limit").addEventListener("input", syncGraphControls);
+  qs("#graph-thesis-limit").addEventListener("change", loadGraphMap);
   qs("#profile-close-button").addEventListener("click", closeThesisProfile);
   qs("#profile-modal").addEventListener("click", (event) => {
     if (event.target.id === "profile-modal") closeThesisProfile();
@@ -174,16 +205,24 @@ function setView(view) {
   if (view === "dataset" && state.datasetRows.length === 0) {
     loadDataset();
   }
+  if (view === "graph" && !state.graphMap && !state.graphBusy) {
+    loadGraphMap();
+  }
 }
 
 async function refreshAll() {
+  state.graphMap = null;
   await Promise.all([loadDashboard(), loadFacets(), loadDataset()]);
   await runSearch({ page: 1 });
   await loadConceptIndex();
+  if (state.view === "graph") {
+    await loadGraphMap();
+  }
 }
 
 async function loadDashboard() {
   const summary = await api.get("/api/summary");
+  renderGraphBackend(summary.backend);
   const nodeCounts = summary.node_counts || {};
   const edgeCounts = summary.edge_counts || {};
   const metrics = [
@@ -209,6 +248,426 @@ async function loadDashboard() {
   if (edgeCounts.RELATED_TO && state.view === "dashboard") {
     qs("#view-subtitle").textContent = `${formatNumber(edgeCounts.RELATED_TO)} thesis similarity links are available.`;
   }
+}
+
+function renderGraphBackend(backend) {
+  qs("#graph-backend-label").textContent = backend === "neo4j" ? "Local Neo4j graph" : "Graph backend";
+}
+
+function syncGraphControls() {
+  qs("#graph-thesis-limit-value").textContent = qs("#graph-thesis-limit").value;
+}
+
+async function loadGraphMap() {
+  const limitInput = qs("#graph-thesis-limit");
+  const thesisLimit = Math.max(20, Math.min(100, Number(limitInput.value || 60)));
+  limitInput.value = String(thesisLimit);
+  syncGraphControls();
+  setGraphBusy(true);
+  renderGraphMapStatus("Loading knowledge graph map...", "working");
+  try {
+    const payload = await api.get(`/api/graph/map?thesis_limit=${thesisLimit}&concept_limit=24`);
+    state.graphMap = payload;
+    state.selectedGraphNodeId = null;
+    renderKnowledgeGraph(payload);
+    renderGraphMapStatus(graphMapSummary(payload), "success");
+  } catch (error) {
+    renderGraphMapStatus(`Graph map failed: ${error.message}`, "error");
+    qs("#knowledge-graph-svg").innerHTML = "";
+    qs("#graph-inspector").innerHTML = `<h3>Graph Inspector</h3><div class="status-banner error-banner">${escapeHtml(error.message)}</div>`;
+  } finally {
+    setGraphBusy(false);
+  }
+}
+
+function graphMapSummary(payload) {
+  const stats = payload.stats || {};
+  const backendLabel = payload.backend === "neo4j" ? "Neo4j" : "Graph";
+  return `${formatNumber(stats.visible_nodes || 0)} visible nodes, ${formatNumber(stats.visible_edges || 0)} relations from ${formatNumber(stats.source_documents || 0)} theses | ${backendLabel}`;
+}
+
+function renderGraphMapStatus(message, kind = "muted") {
+  const status = qs("#graph-map-status");
+  status.textContent = message;
+  status.className = `status-banner ${kind}-banner compact-status`;
+}
+
+function setGraphBusy(isBusy) {
+  state.graphBusy = isBusy;
+  qs("#graph-reload-button").disabled = isBusy;
+  qs("#graph-thesis-limit").disabled = isBusy;
+}
+
+function renderKnowledgeGraph(payload) {
+  const svg = qs("#knowledge-graph-svg");
+  const shell = qs(".graph-canvas-shell");
+  const width = Math.max(720, Math.round(shell.clientWidth || 960));
+  const height = Math.max(420, Math.round(shell.clientHeight || 620));
+  const nodes = (payload.nodes || []).map((node, index) => ({
+    ...node,
+    index,
+    radius: graphNodeRadius(node),
+    x: 0,
+    y: 0,
+    vx: 0,
+    vy: 0,
+  }));
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const edges = (payload.edges || [])
+    .map((edge) => ({
+      ...edge,
+      sourceNode: nodeById.get(edge.source),
+      targetNode: nodeById.get(edge.target),
+    }))
+    .filter((edge) => edge.sourceNode && edge.targetNode);
+
+  if (state.graphAnimationFrame) {
+    cancelAnimationFrame(state.graphAnimationFrame);
+    state.graphAnimationFrame = null;
+  }
+
+  if (!nodes.length) {
+    svg.innerHTML = "";
+    renderGraphInspector(null);
+    return;
+  }
+
+  placeGraphNodes(nodes, width, height);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.innerHTML = `
+    <g class="graph-edge-layer">
+      ${edges.map((edge, index) => `
+        <line
+          class="graph-edge"
+          data-index="${index}"
+          data-source="${escapeHtml(edge.source)}"
+          data-target="${escapeHtml(edge.target)}"
+        ></line>
+      `).join("")}
+    </g>
+    <g class="graph-node-layer">
+      ${nodes.map((node) => `
+        <g class="graph-node type-${escapeHtml(node.type.toLowerCase())} ${graphNodeShouldShowLabel(node) ? "labelled" : ""}" data-node-id="${escapeHtml(node.id)}" tabindex="0" role="button" aria-label="${escapeHtml(`${graphTypeLabel(node.type)}: ${node.label}`)}">
+          <circle r="${node.radius}" fill="${escapeHtml(graphTypeColor(node.type))}"></circle>
+          <text class="graph-node-label" y="${node.radius + 13}">${escapeHtml(graphVisibleLabel(node))}</text>
+        </g>
+      `).join("")}
+    </g>
+  `;
+
+  svg.querySelectorAll(".graph-node").forEach((element) => {
+    const node = nodeById.get(element.dataset.nodeId);
+    element.addEventListener("click", () => selectGraphNode(node.id));
+    element.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectGraphNode(node.id);
+      }
+    });
+    bindGraphDrag(svg, element, node, nodes, edges);
+  });
+
+  renderGraphLegend(payload);
+  renderGraphInspector(null);
+  runGraphLayout(nodes, edges, width, height);
+}
+
+function placeGraphNodes(nodes, width, height) {
+  const groups = new Map();
+  nodes.forEach((node) => {
+    if (!groups.has(node.type)) groups.set(node.type, []);
+    groups.get(node.type).push(node);
+  });
+  const anchors = {
+    Thesis: [0.5, 0.52],
+    Concept: [0.22, 0.24],
+    Keyword: [0.22, 0.76],
+    UseCase: [0.8, 0.28],
+    Methodology: [0.78, 0.76],
+    Year: [0.5, 0.13],
+    MasterLevel: [0.1, 0.52],
+    Track: [0.9, 0.52],
+  };
+
+  groups.forEach((items, type) => {
+    const [anchorX, anchorY] = anchors[type] || [0.5, 0.5];
+    const baseX = width * anchorX;
+    const baseY = height * anchorY;
+    const ring = type === "Thesis" ? Math.min(width, height) * 0.24 : Math.min(width, height) * 0.11;
+    items.forEach((node, index) => {
+      const angle = (Math.PI * 2 * index) / Math.max(1, items.length);
+      const radius = ring * (0.55 + (index % 4) * 0.16);
+      node.x = clamp(baseX + Math.cos(angle) * radius, 28, width - 28);
+      node.y = clamp(baseY + Math.sin(angle) * radius, 28, height - 28);
+    });
+  });
+}
+
+function runGraphLayout(nodes, edges, width, height) {
+  let tick = 0;
+  const maxTicks = 150;
+  const anchors = {
+    Thesis: [width * 0.5, height * 0.52],
+    Concept: [width * 0.22, height * 0.24],
+    Keyword: [width * 0.22, height * 0.76],
+    UseCase: [width * 0.8, height * 0.28],
+    Methodology: [width * 0.78, height * 0.76],
+    Year: [width * 0.5, height * 0.13],
+    MasterLevel: [width * 0.1, height * 0.52],
+    Track: [width * 0.9, height * 0.52],
+  };
+
+  function step() {
+    applyGraphForces(nodes, edges, anchors, width, height);
+    renderGraphPositions(nodes, edges);
+    tick += 1;
+    if (tick < maxTicks) {
+      state.graphAnimationFrame = requestAnimationFrame(step);
+    } else {
+      state.graphAnimationFrame = null;
+    }
+  }
+
+  renderGraphPositions(nodes, edges);
+  state.graphAnimationFrame = requestAnimationFrame(step);
+}
+
+function applyGraphForces(nodes, edges, anchors, width, height) {
+  edges.forEach((edge) => {
+    const source = edge.sourceNode;
+    const target = edge.targetNode;
+    const dx = target.x - source.x;
+    const dy = target.y - source.y;
+    const distance = Math.sqrt(dx * dx + dy * dy) || 1;
+    const desired = source.type === "Thesis" && target.type === "Thesis" ? 130 : 95;
+    const force = (distance - desired) * 0.0045;
+    const fx = (dx / distance) * force;
+    const fy = (dy / distance) * force;
+    source.vx += fx;
+    source.vy += fy;
+    target.vx -= fx;
+    target.vy -= fy;
+  });
+
+  for (let left = 0; left < nodes.length; left += 1) {
+    for (let right = left + 1; right < nodes.length; right += 1) {
+      const a = nodes[left];
+      const b = nodes[right];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const distanceSquared = Math.max(80, dx * dx + dy * dy);
+      const distance = Math.sqrt(distanceSquared);
+      const force = Math.min(2.2, 460 / distanceSquared);
+      const fx = (dx / distance) * force;
+      const fy = (dy / distance) * force;
+      a.vx -= fx;
+      a.vy -= fy;
+      b.vx += fx;
+      b.vy += fy;
+    }
+  }
+
+  nodes.forEach((node) => {
+    const [anchorX, anchorY] = anchors[node.type] || [width * 0.5, height * 0.5];
+    node.vx += (anchorX - node.x) * 0.002;
+    node.vy += (anchorY - node.y) * 0.002;
+    node.vx *= 0.82;
+    node.vy *= 0.82;
+    node.x = clamp(node.x + node.vx, node.radius + 18, width - node.radius - 18);
+    node.y = clamp(node.y + node.vy, node.radius + 18, height - node.radius - 26);
+  });
+}
+
+function renderGraphPositions(nodes, edges) {
+  const svg = qs("#knowledge-graph-svg");
+  edges.forEach((edge, index) => {
+    const line = svg.querySelector(`.graph-edge[data-index="${index}"]`);
+    if (!line) return;
+    line.setAttribute("x1", edge.sourceNode.x);
+    line.setAttribute("y1", edge.sourceNode.y);
+    line.setAttribute("x2", edge.targetNode.x);
+    line.setAttribute("y2", edge.targetNode.y);
+  });
+  nodes.forEach((node) => {
+    const element = svg.querySelector(`.graph-node[data-node-id="${cssEscape(node.id)}"]`);
+    if (element) {
+      element.setAttribute("transform", `translate(${node.x.toFixed(2)} ${node.y.toFixed(2)})`);
+    }
+  });
+}
+
+function bindGraphDrag(svg, element, node, nodes, edges) {
+  let dragging = false;
+  element.addEventListener("pointerdown", (event) => {
+    dragging = true;
+    element.setPointerCapture(event.pointerId);
+    if (state.graphAnimationFrame) {
+      cancelAnimationFrame(state.graphAnimationFrame);
+      state.graphAnimationFrame = null;
+    }
+    event.preventDefault();
+  });
+  element.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    const point = svgPoint(svg, event.clientX, event.clientY);
+    node.x = point.x;
+    node.y = point.y;
+    node.vx = 0;
+    node.vy = 0;
+    renderGraphPositions(nodes, edges);
+  });
+  element.addEventListener("pointerup", (event) => {
+    dragging = false;
+    element.releasePointerCapture(event.pointerId);
+  });
+  element.addEventListener("pointercancel", () => {
+    dragging = false;
+  });
+}
+
+function svgPoint(svg, clientX, clientY) {
+  const point = svg.createSVGPoint();
+  point.x = clientX;
+  point.y = clientY;
+  return point.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+function renderGraphLegend(payload) {
+  const counts = payload.stats?.visible_node_counts || {};
+  const types = Object.keys(graphTypeLabels).filter((type) => counts[type]);
+  qs("#graph-legend").innerHTML = types
+    .map((type) => `
+      <span class="graph-legend-item">
+        <span class="graph-legend-swatch" style="background:${escapeHtml(graphTypeColor(type))}"></span>
+        ${escapeHtml(graphTypeLabel(type))} <strong>${formatNumber(counts[type])}</strong>
+      </span>
+    `)
+    .join("");
+}
+
+function selectGraphNode(nodeId) {
+  state.selectedGraphNodeId = nodeId;
+  renderGraphSelection();
+  renderGraphInspector(nodeId);
+}
+
+function renderGraphSelection() {
+  const payload = state.graphMap;
+  if (!payload) return;
+  const selected = state.selectedGraphNodeId;
+  const connected = new Set([selected]);
+  (payload.edges || []).forEach((edge) => {
+    if (edge.source === selected) connected.add(edge.target);
+    if (edge.target === selected) connected.add(edge.source);
+  });
+  qsa(".graph-node").forEach((element) => {
+    const isConnected = connected.has(element.dataset.nodeId);
+    element.classList.toggle("selected", element.dataset.nodeId === selected);
+    element.classList.toggle("dimmed", Boolean(selected) && !isConnected);
+  });
+  qsa(".graph-edge").forEach((element) => {
+    const isConnected = element.dataset.source === selected || element.dataset.target === selected;
+    element.classList.toggle("selected", isConnected);
+    element.classList.toggle("dimmed", Boolean(selected) && !isConnected);
+  });
+}
+
+function renderGraphInspector(nodeId) {
+  const container = qs("#graph-inspector");
+  const payload = state.graphMap;
+  if (!payload || !nodeId) {
+    container.innerHTML = `<h3>Graph Inspector</h3><div class="empty-state">Select a node to inspect its metadata and direct connections.</div>`;
+    return;
+  }
+  const node = (payload.nodes || []).find((item) => item.id === nodeId);
+  if (!node) return;
+  const nodeById = new Map((payload.nodes || []).map((item) => [item.id, item]));
+  const directEdges = (payload.edges || []).filter((edge) => edge.source === nodeId || edge.target === nodeId);
+  const neighbours = directEdges
+    .map((edge) => {
+      const neighbourId = edge.source === nodeId ? edge.target : edge.source;
+      return { edge, node: nodeById.get(neighbourId) };
+    })
+    .filter((item) => item.node)
+    .slice(0, 18);
+
+  container.innerHTML = `
+    <h3>${escapeHtml(graphTypeLabel(node.type))}</h3>
+    <div class="graph-inspector-title">
+      <span class="graph-type-pill" style="background:${escapeHtml(graphTypeColor(node.type))}">${escapeHtml(graphTypeLabel(node.type))}</span>
+      <strong>${escapeHtml(node.label)}</strong>
+      <span>${escapeHtml(node.subtitle || "")}</span>
+    </div>
+    ${node.type === "Thesis" ? renderGraphThesisActions(node) : ""}
+    <div class="detail-section">
+      <h4>Connections</h4>
+      <div class="mini-list">
+        ${neighbours.map(({ edge, node: neighbour }) => `
+          <button class="mini-row graph-neighbour" type="button" data-node-id="${escapeHtml(neighbour.id)}">
+            <strong>${escapeHtml(graphTypeLabel(neighbour.type))} | ${escapeHtml(truncate(neighbour.label, 76))}</strong>
+            <span>${escapeHtml(formatGraphEdgeType(edge.type))}</span>
+          </button>
+        `).join("") || '<div class="muted">No visible direct connection.</div>'}
+      </div>
+    </div>
+  `;
+  qsa(".graph-neighbour").forEach((button) => {
+    button.addEventListener("click", () => selectGraphNode(button.dataset.nodeId));
+  });
+  qsa(".graph-profile-button").forEach((button) => {
+    button.addEventListener("click", () => openThesisProfile(button.dataset.thesisId));
+  });
+}
+
+function renderGraphThesisActions(node) {
+  const thesisId = node.metadata?.thesis_id || node.id.replace("thesis:", "");
+  return `
+    <div class="graph-inspector-actions">
+      <button class="secondary-button compact-button graph-profile-button" type="button" data-thesis-id="${escapeHtml(thesisId)}">View profile</button>
+      <a class="pdf-link compact-link" href="/api/files/${encodeURIComponent(thesisId)}" target="_blank" rel="noreferrer">Open PDF</a>
+    </div>
+  `;
+}
+
+function graphNodeRadius(node) {
+  const base = node.type === "Thesis" ? 7 : 10;
+  return Math.min(node.type === "Thesis" ? 13 : 20, base + Math.sqrt(Math.max(1, node.weight || 1)) * 1.6);
+}
+
+function graphVisibleLabel(node) {
+  if (node.type === "Thesis") return node.metadata?.thesis_id || truncate(node.label, 24);
+  return truncate(node.label, node.type === "Thesis" ? 24 : 28);
+}
+
+function graphNodeShouldShowLabel(node) {
+  const incoming = Number(node.incoming_edges || node.weight || 1);
+  if (node.type === "Thesis") return false;
+  if (node.type === "Keyword") return false;
+  if (node.type === "Concept") return incoming >= 12;
+  return true;
+}
+
+function graphTypeColor(type) {
+  return graphTypeColors[type] || "#627083";
+}
+
+function graphTypeLabel(type) {
+  return graphTypeLabels[type] || type;
+}
+
+function formatGraphEdgeType(type) {
+  return String(type || "").toLowerCase().replaceAll("_", " ");
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function cssEscape(value) {
+  if (window.CSS && typeof window.CSS.escape === "function") {
+    return window.CSS.escape(value);
+  }
+  return String(value).replaceAll('"', '\\"').replaceAll("\\", "\\\\");
 }
 
 async function loadFacets() {
@@ -966,9 +1425,9 @@ async function approveCurrentImport() {
     renderBatchList();
     await refreshAll();
     if (selectNextPendingImport(approvedIndex, false)) {
-      renderImportStatus(`Approved ${result.thesis_id}. Next draft selected. Database, CSV, graph, and RAG are updated.`, "success");
+      renderImportStatus(`Approved ${result.thesis_id}. Next draft selected. Neo4j, CSV, graph, and RAG are updated.`, "success");
     } else {
-      renderImportStatus(`Approved ${result.thesis_id}. Database, CSV, graph, and RAG are updated.`, "success");
+      renderImportStatus(`Approved ${result.thesis_id}. Neo4j, CSV, graph, and RAG are updated.`, "success");
       renderReviewEmpty();
       qs("#pdf-file").value = "";
       updateFileLabel();

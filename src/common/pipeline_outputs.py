@@ -6,8 +6,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from common.db import connect, init_schema
-from common.paths import db_path, graph_dir, processed_dir, reports_dir
+from common.paths import graph_dir, processed_dir, reports_dir
 from graph.knowledge_graph import KnowledgeGraph, build_knowledge_graph, graph_summary
 
 
@@ -34,63 +33,14 @@ NODE_COLUMNS = ["node_id", "node_type", "label", "slug", "source", "properties_j
 EDGE_COLUMNS = ["edge_id", "source_id", "target_id", "edge_type", "weight", "source", "properties_json"]
 
 
-def active_documents(database_path: Path | None = None) -> list[dict[str, Any]]:
-    with connect(database_path or db_path()) as conn:
-        init_schema(conn)
-        return [
-            dict(row)
-            for row in conn.execute(
-                """
-                SELECT *
-                FROM documents
-                WHERE status = 'active'
-                ORDER BY thesis_id
-                """
-            ).fetchall()
-        ]
-
-
-def replace_graph_tables(graph: KnowledgeGraph, database_path: Path | None = None) -> None:
-    with connect(database_path or db_path()) as conn:
-        init_schema(conn)
-        conn.execute("DELETE FROM graph_edges")
-        conn.execute("DELETE FROM graph_nodes")
-        conn.executemany(
-            """
-            INSERT INTO graph_nodes (node_id, node_type, label, slug, source, properties_json)
-            VALUES (:node_id, :node_type, :label, :slug, :source, :properties_json)
-            """,
-            [node.to_record() for node in graph.sorted_nodes()],
-        )
-        conn.executemany(
-            """
-            INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, weight, source, properties_json)
-            VALUES (:edge_id, :source_id, :target_id, :edge_type, :weight, :source, :properties_json)
-            """,
-            [edge.to_record() for edge in graph.sorted_edges()],
-        )
-        conn.commit()
-
-
-def write_document_csv(database_path: Path | None = None, output_path: Path | None = None) -> Path:
+def write_document_csv_rows(rows: list[dict[str, Any]], output_path: Path | None = None) -> Path:
     path = output_path or processed_dir() / "theses.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
-    with connect(database_path or db_path()) as conn:
-        init_schema(conn)
-        rows = conn.execute(
-            f"""
-            SELECT {", ".join(DOCUMENT_EXPORT_COLUMNS)}
-            FROM documents
-            WHERE status = 'active'
-            ORDER BY thesis_id
-            """
-        ).fetchall()
-
     with path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=DOCUMENT_EXPORT_COLUMNS)
         writer.writeheader()
-        for row in rows:
-            writer.writerow({column: row[column] for column in DOCUMENT_EXPORT_COLUMNS})
+        for row in sorted(rows, key=lambda item: str(item.get("thesis_id") or "")):
+            writer.writerow({column: row.get(column, "") for column in DOCUMENT_EXPORT_COLUMNS})
     return path
 
 
@@ -200,20 +150,24 @@ def write_graph_metric_reports(graph: KnowledgeGraph) -> tuple[Path, Path]:
     return node_metrics_path, related_theses_path
 
 
-def rebuild_graph_outputs(
-    database_path: Path | None = None,
+def rebuild_graph_outputs_from_rows(
+    rows: list[dict[str, Any]],
     related_min_shared_concepts: int = 3,
 ) -> dict[str, Any]:
-    rows = active_documents(database_path)
-    graph = build_knowledge_graph(rows, related_min_shared_concepts=related_min_shared_concepts)
-    replace_graph_tables(graph, database_path)
+    active_rows = [
+        dict(row)
+        for row in rows
+        if str(row.get("status") or "active") == "active"
+    ]
+    active_rows.sort(key=lambda item: str(item.get("thesis_id") or ""))
+    graph = build_knowledge_graph(active_rows, related_min_shared_concepts=related_min_shared_concepts)
     nodes_path, edges_path = write_graph_csv_outputs(graph)
     snapshot_path = write_graph_json_snapshot(graph)
-    summary_path = write_graph_summary(graph, len(rows))
+    summary_path = write_graph_summary(graph, len(active_rows))
     node_metrics_path, related_theses_path = write_graph_metric_reports(graph)
-    csv_path = write_document_csv(database_path)
+    csv_path = write_document_csv_rows(active_rows)
     return {
-        "source_documents": len(rows),
+        "source_documents": len(active_rows),
         "nodes_total": len(graph.nodes),
         "edges_total": len(graph.edges),
         "csv_path": str(csv_path),

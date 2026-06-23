@@ -10,9 +10,10 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from common.db import connect, init_schema
-from common.paths import db_path, reports_dir
+from common.paths import reports_dir
+from common.pipeline_outputs import rebuild_graph_outputs_from_rows
 from extraction.field_extractor import classify_methodology, classify_use_case, confidence_score
+from graph.neo4j_store import Neo4jGraphQueryService
 
 
 def compact(text: str | None, max_chars: int) -> str:
@@ -109,7 +110,7 @@ def recompute_review(row: dict[str, Any]) -> tuple[float, int, str]:
     return confidence, 1 if confidence < 0.70 or notes else 0, "; ".join(notes)
 
 
-def apply_review(conn, row: dict[str, Any], review: dict[str, Any], model: str, min_confidence: float) -> dict[str, Any]:
+def apply_review(row: dict[str, Any], review: dict[str, Any], model: str, min_confidence: float) -> dict[str, Any]:
     llm_confidence = confidence_value(review.get("confidence"))
     updated = dict(row)
     updates: dict[str, Any] = {}
@@ -146,8 +147,7 @@ def apply_review(conn, row: dict[str, Any], review: dict[str, Any], model: str, 
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         }
     )
-    set_clause = ", ".join(f"{key}=?" for key in updates)
-    conn.execute(f"UPDATE documents SET {set_clause} WHERE id=?", [*updates.values(), row["id"]])
+    updated.update(updates)
     return updated
 
 
@@ -182,47 +182,51 @@ def main() -> None:
     parser.add_argument("--timeout", type=int, default=240)
     args = parser.parse_args()
 
-    report_rows = []
-    with connect(db_path()) as conn:
-        init_schema(conn)
-        rows = conn.execute(
-            """
-            SELECT *
-            FROM documents
-            WHERE (abstract IS NULL OR abstract = '')
-              AND ((introduction IS NOT NULL AND introduction != '') OR (cover_text IS NOT NULL AND cover_text != ''))
-            ORDER BY thesis_id
-            """
-        ).fetchall()
-        if args.limit:
-            rows = rows[: args.limit]
+    graph_service = Neo4jGraphQueryService()
+    graph_service.verify_connectivity()
+    all_rows = graph_service.document_rows()
+    rows_by_id = {str(row.get("thesis_id")): dict(row) for row in all_rows}
+    rows = [
+        dict(row)
+        for row in all_rows
+        if not str(row.get("abstract") or "").strip()
+        and (
+            str(row.get("introduction") or "").strip()
+            or str(row.get("cover_text") or "").strip()
+        )
+    ]
+    if args.limit:
+        rows = rows[: args.limit]
 
-        for index, sqlite_row in enumerate(rows, start=1):
-            row = dict(sqlite_row)
-            print(f"[{index}/{len(rows)}] generating abstract {row['thesis_id']} {row['file_name']}")
-            report = {
-                "thesis_id": row["thesis_id"],
-                "file_name": row["file_name"],
-                "old_has_abstract": bool(row.get("abstract")),
-                "applied": False,
-                "error": "",
-            }
-            try:
-                review = call_ollama(args.model, build_prompt(row), args.timeout)
-                report["generated_abstract"] = review.get("abstract", "")
-                report["llm_confidence"] = review.get("confidence", "")
-                report["llm_notes"] = review.get("notes", "")
-                if args.apply:
-                    updated = apply_review(conn, row, review, args.model, args.min_confidence)
-                    report["applied"] = True
-                    report["new_has_abstract"] = bool(updated.get("abstract"))
-                else:
-                    report["new_has_abstract"] = bool(review.get("abstract"))
-            except Exception as exc:
-                report["error"] = repr(exc)
-            report_rows.append(report)
-        if args.apply:
-            conn.commit()
+    report_rows = []
+    for index, row in enumerate(rows, start=1):
+        print(f"[{index}/{len(rows)}] generating abstract {row['thesis_id']} {row['file_name']}")
+        report = {
+            "thesis_id": row["thesis_id"],
+            "file_name": row["file_name"],
+            "old_has_abstract": bool(row.get("abstract")),
+            "applied": False,
+            "error": "",
+        }
+        try:
+            review = call_ollama(args.model, build_prompt(row), args.timeout)
+            report["generated_abstract"] = review.get("abstract", "")
+            report["llm_confidence"] = review.get("confidence", "")
+            report["llm_notes"] = review.get("notes", "")
+            if args.apply:
+                updated = apply_review(row, review, args.model, args.min_confidence)
+                rows_by_id[str(updated["thesis_id"])] = updated
+                report["applied"] = True
+                report["new_has_abstract"] = bool(updated.get("abstract"))
+            else:
+                report["new_has_abstract"] = bool(review.get("abstract"))
+        except Exception as exc:
+            report["error"] = repr(exc)
+        report_rows.append(report)
+    if args.apply and report_rows:
+        updated_rows = sorted(rows_by_id.values(), key=lambda item: str(item.get("thesis_id") or ""))
+        graph_service.replace_with_documents(updated_rows)
+        rebuild_graph_outputs_from_rows(graph_service.document_rows())
 
     report_path = write_report(report_rows, args.model)
     print(f"Rows reviewed: {len(report_rows)}")

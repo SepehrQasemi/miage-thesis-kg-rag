@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from graph.neo4j_store import Neo4jGraphQueryService
 from ingestion.import_workflow import load_draft, save_draft
 
 
@@ -28,8 +29,10 @@ def generate_import_suggestions(
     model: str | None = None,
     ollama_url: str | None = None,
     timeout: int | None = None,
+    graph_service: Neo4jGraphQueryService | None = None,
 ) -> dict[str, Any]:
-    draft = load_draft(draft_id)
+    graph_service = graph_service or Neo4jGraphQueryService()
+    draft = load_draft(draft_id, graph_service)
     if draft.get("status") != "draft":
         raise LLMSuggestionError("LLM suggestions are only available for open drafts.")
 
@@ -49,7 +52,7 @@ def generate_import_suggestions(
         "review_reasons": review_reasons(fields, draft.get("extraction_confidence", 0)),
     }
     draft["llm_suggestions"] = result
-    save_draft(draft)
+    save_draft(draft, graph_service)
     return result
 
 

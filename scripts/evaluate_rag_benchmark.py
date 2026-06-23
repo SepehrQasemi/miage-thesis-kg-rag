@@ -10,7 +10,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from common.paths import db_path, reports_dir
+from common.paths import reports_dir
+from graph.neo4j_store import Neo4jGraphQueryService
 from rag.service import RagService
 
 
@@ -155,7 +156,8 @@ def main() -> None:
     parser.add_argument("--no-fail", action="store_true", help="Always exit 0 after writing the report.")
     args = parser.parse_args()
 
-    service = RagService(db_path())
+    graph_service = Neo4jGraphQueryService()
+    service = RagService(rows_provider=graph_service.document_rows)
     rows = [evaluate_case(service, case) for case in CASES]
     passed = sum(1 for row in rows if row["passed"])
     failed_rows = [row for row in rows if not row["passed"]]

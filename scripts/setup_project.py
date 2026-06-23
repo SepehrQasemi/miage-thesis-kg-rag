@@ -9,18 +9,16 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
-from common.db import connect, init_schema
 from common.paths import (
     cache_dir,
-    db_path,
     graph_dir,
     processed_dir,
     raw_pdf_dir,
     reports_dir,
     staging_dir,
 )
-from common.pipeline_outputs import rebuild_graph_outputs
-from rag.embeddings import rebuild_embeddings
+from common.pipeline_outputs import rebuild_graph_outputs_from_rows
+from graph.neo4j_store import Neo4jGraphQueryService
 
 
 DATA_DIRECTORIES = [
@@ -55,15 +53,20 @@ def ensure_env_file() -> None:
     print(f"Created {env_path.relative_to(ROOT)} from .env.example")
 
 
-def initialize_database(reset: bool) -> None:
-    database = db_path()
-    if reset and database.exists():
-        database.unlink()
-    with connect(database) as conn:
-        init_schema(conn)
-    rebuild_graph_outputs(database)
-    rebuild_embeddings(database)
-    print(f"Database ready: {database}")
+def initialize_neo4j(reset: bool) -> None:
+    service = Neo4jGraphQueryService()
+    try:
+        service.verify_connectivity()
+    except Exception as exc:
+        raise SystemExit(
+            "Neo4j is required. Start it with `docker compose up -d neo4j`, "
+            f"then rerun setup. Details: {exc}"
+        ) from exc
+    service.ensure_schema()
+    if reset:
+        service.replace_with_documents([])
+    rebuild_graph_outputs_from_rows(service.document_rows())
+    print("Neo4j graph store ready.")
 
 
 def raw_pdf_count() -> int:
@@ -94,7 +97,7 @@ def main() -> None:
     parser.add_argument("--install-playwright", action="store_true", help="Install Playwright Chromium for UI tests.")
     parser.add_argument("--install-ollama", action="store_true", help="Install Ollama if missing, then pull the configured model.")
     parser.add_argument("--ollama-model", default="qwen2.5:7b", help="Ollama model to pull when --install-ollama is used.")
-    parser.add_argument("--reset-db", action="store_true", help="Delete and recreate the local SQLite database.")
+    parser.add_argument("--reset-neo4j", action="store_true", help="Delete and recreate the Neo4j thesis graph.")
     parser.add_argument("--build-data", action="store_true", help="Process PDFs already present in data/raw/theses_pdf.")
     parser.add_argument("--no-ocr", action="store_true", help="Disable OCR when --build-data is used.")
     args = parser.parse_args()
@@ -109,7 +112,7 @@ def main() -> None:
     if args.install_ollama:
         run([sys.executable, "scripts/setup_ollama.py", "--install", "--pull", "--model", args.ollama_model])
 
-    initialize_database(reset=args.reset_db)
+    initialize_neo4j(reset=args.reset_neo4j)
 
     if args.build_data:
         build_existing_data(no_ocr=args.no_ocr)
@@ -119,6 +122,9 @@ def main() -> None:
     print("  python scripts/run_web_app.py --port 8000")
     print("Open:")
     print("  http://127.0.0.1:8000")
+    print("\nNeo4j is the application database:")
+    print("  docker compose up -d neo4j")
+    print("  python scripts/doctor.py")
     if raw_pdf_count() == 0:
         print("\nNo raw PDFs were found. Use the Import PDF screen to add theses.")
     else:

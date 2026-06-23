@@ -13,10 +13,11 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from common.db import connect, init_schema
-from common.paths import db_path, reports_dir
+from common.paths import reports_dir
+from common.pipeline_outputs import rebuild_graph_outputs_from_rows
 from extraction.field_extractor import confidence_score, extract_title_candidates, is_valid_title
 from extraction.text_utils import normalize_for_match
+from graph.neo4j_store import Neo4jGraphQueryService
 
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -182,6 +183,12 @@ def value_or_empty(value: Any) -> str:
     return "" if text.lower() == "unknown" else text
 
 
+def is_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes"}
+
+
 def normalize_master_level(value: Any) -> str:
     spaced, compact = normalize_for_match(value_or_empty(value))
     if compact in {"m1", "master1", "mastermiage1"} or "master1" in compact or "1ereannee" in compact or "1reannee" in compact:
@@ -277,7 +284,7 @@ def recompute_review(row: dict[str, Any]) -> tuple[float, int, str]:
     return confidence, 1 if confidence < 0.70 or notes else 0, "; ".join(notes)
 
 
-def apply_review(conn, row, review: dict[str, Any], model: str, min_confidence: float) -> dict[str, Any]:
+def apply_review(row, review: dict[str, Any], model: str, min_confidence: float) -> dict[str, Any]:
     llm_confidence = confidence_value(review.get("confidence"))
     updated = dict(row)
     updates: dict[str, Any] = {}
@@ -308,9 +315,7 @@ def apply_review(conn, row, review: dict[str, Any], model: str, min_confidence: 
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         }
     )
-    set_clause = ", ".join(f"{key}=?" for key in updates)
-    values = list(updates.values()) + [row["id"]]
-    conn.execute(f"UPDATE documents SET {set_clause} WHERE id=?", values)
+    updated.update(updates)
     return updated
 
 
@@ -359,67 +364,64 @@ def main() -> None:
     parser.add_argument("--timeout", type=int, default=240)
     args = parser.parse_args()
 
-    with connect(db_path()) as conn:
-        init_schema(conn)
-        rows = conn.execute(
-            """
-            SELECT *
-            FROM documents
-            WHERE needs_review = 1
-            ORDER BY thesis_id
-            """
-        ).fetchall()
-        if args.limit:
-            rows = rows[: args.limit]
+    graph_service = Neo4jGraphQueryService()
+    graph_service.verify_connectivity()
+    all_rows = graph_service.document_rows()
+    rows_by_id = {str(row.get("thesis_id")): dict(row) for row in all_rows}
+    rows = [dict(row) for row in all_rows if is_truthy(row.get("needs_review"))]
+    if args.limit:
+        rows = rows[: args.limit]
 
-        report_rows = []
-        for index, sqlite_row in enumerate(rows, start=1):
-            row = dict(sqlite_row)
-            print(f"[{index}/{len(rows)}] reviewing {row['thesis_id']} {row['file_name']}")
-            report = {
-                "thesis_id": row["thesis_id"],
-                "file_name": row["file_name"],
-                "old_title": row["title"] or "",
-                "old_year": row["year"] or "",
-                "old_master_level": row["master_level"] or "",
-                "old_track": row["track"] or "",
-                "old_has_abstract": bool(row["abstract"]),
-                "old_use_case": row["use_case"] or "",
-                "old_methodology": row["methodology"] or "",
-                "old_concepts": row["concepts"] or "",
-                "applied": False,
-                "error": "",
-            }
-            try:
-                review = call_ollama(args.model, build_prompt(row), args.timeout)
-                if args.apply:
-                    updated = apply_review(conn, row, review, args.model, args.min_confidence)
-                    report["applied"] = True
-                    report["new_title"] = updated.get("title") or ""
-                    report["new_year"] = updated.get("year") or ""
-                    report["new_master_level"] = updated.get("master_level") or ""
-                    report["new_track"] = updated.get("track") or ""
-                    report["new_has_abstract"] = bool(updated.get("abstract"))
-                    report["new_use_case"] = updated.get("use_case") or ""
-                    report["new_methodology"] = updated.get("methodology") or ""
-                    report["new_concepts"] = updated.get("concepts") or ""
-                else:
-                    report["new_title"] = review.get("title", "")
-                    report["new_year"] = review.get("year", "")
-                    report["new_master_level"] = review.get("master_level", "")
-                    report["new_track"] = review.get("track", "")
-                    report["new_has_abstract"] = bool(review.get("abstract"))
-                    report["new_use_case"] = review.get("use_case", "")
-                    report["new_methodology"] = review.get("methodology", "")
-                    report["new_concepts"] = concepts_text(review.get("concepts"))
-                report["llm_confidence"] = review.get("confidence", "")
-                report["llm_needs_review"] = review.get("needs_review", "")
-                report["llm_notes"] = review.get("notes", "")
-            except (urllib.error.URLError, TimeoutError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError, RuntimeError) as exc:
-                report["error"] = repr(exc)
-            report_rows.append(report)
-        if args.apply:
-            conn.commit()
+    report_rows = []
+    for index, row in enumerate(rows, start=1):
+        print(f"[{index}/{len(rows)}] reviewing {row['thesis_id']} {row['file_name']}")
+        report = {
+            "thesis_id": row["thesis_id"],
+            "file_name": row["file_name"],
+            "old_title": row["title"] or "",
+            "old_year": row["year"] or "",
+            "old_master_level": row["master_level"] or "",
+            "old_track": row["track"] or "",
+            "old_has_abstract": bool(row["abstract"]),
+            "old_use_case": row["use_case"] or "",
+            "old_methodology": row["methodology"] or "",
+            "old_concepts": row["concepts"] or "",
+            "applied": False,
+            "error": "",
+        }
+        try:
+            review = call_ollama(args.model, build_prompt(row), args.timeout)
+            if args.apply:
+                updated = apply_review(row, review, args.model, args.min_confidence)
+                rows_by_id[str(updated["thesis_id"])] = updated
+                report["applied"] = True
+                report["new_title"] = updated.get("title") or ""
+                report["new_year"] = updated.get("year") or ""
+                report["new_master_level"] = updated.get("master_level") or ""
+                report["new_track"] = updated.get("track") or ""
+                report["new_has_abstract"] = bool(updated.get("abstract"))
+                report["new_use_case"] = updated.get("use_case") or ""
+                report["new_methodology"] = updated.get("methodology") or ""
+                report["new_concepts"] = updated.get("concepts") or ""
+            else:
+                report["new_title"] = review.get("title", "")
+                report["new_year"] = review.get("year", "")
+                report["new_master_level"] = review.get("master_level", "")
+                report["new_track"] = review.get("track", "")
+                report["new_has_abstract"] = bool(review.get("abstract"))
+                report["new_use_case"] = review.get("use_case", "")
+                report["new_methodology"] = review.get("methodology", "")
+                report["new_concepts"] = concepts_text(review.get("concepts"))
+            report["llm_confidence"] = review.get("confidence", "")
+            report["llm_needs_review"] = review.get("needs_review", "")
+            report["llm_notes"] = review.get("notes", "")
+        except (urllib.error.URLError, TimeoutError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError, RuntimeError) as exc:
+            report["error"] = repr(exc)
+        report_rows.append(report)
+    if args.apply and report_rows:
+        updated_rows = sorted(rows_by_id.values(), key=lambda item: str(item.get("thesis_id") or ""))
+        graph_service.replace_with_documents(updated_rows)
+        rebuild_graph_outputs_from_rows(graph_service.document_rows())
 
     report_path = write_report(report_rows, args.model)
     print(f"Reviewed rows: {len(report_rows)}")

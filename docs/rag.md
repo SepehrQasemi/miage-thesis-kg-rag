@@ -1,139 +1,89 @@
-# Local Metadata RAG
+# RAG
 
-The first RAG layer is intentionally local, free, and metadata-based.
+## Goal
 
-It does not send data to a paid API and it does not chunk full PDFs yet. Each thesis is represented by one retrieval text built from validated metadata:
+The RAG layer answers questions about the thesis dataset using structured metadata stored in Neo4j.
 
-- title
-- year
-- master level
-- track
-- keywords
-- concepts
-- use case
-- methodology
-- abstract, introduction, and conclusion when available
+It is intentionally local and free:
 
-## Storage
+- no paid API;
+- no cloud embedding service;
+- deterministic local embeddings;
+- Neo4j thesis rows as the source of truth.
 
-Embeddings are stored in SQLite table:
+## Source Data
 
-`document_embeddings`
+For each thesis, RAG uses fields such as:
 
-Each row contains:
+- title;
+- year;
+- master level;
+- track;
+- abstract when available;
+- keywords;
+- concepts;
+- use case;
+- methodology;
+- introduction and conclusion when available.
 
-- `thesis_id`
-- `embedding_model`
-- `embedding_dimensions`
-- `embedding_text`
-- `embedding_vector_json`
-- `embedding_hash`
+The full PDF text is not the default RAG source. This keeps the first version focused on the structured metadata that was extracted and reviewed.
 
-The current default model is `local-hash-v1`. It is a deterministic local hashing embedder, so fresh GitHub clones can run RAG search without downloading a large model.
+## Retrieval
 
-## Ranking And Relevance Threshold
+The retrieval service builds weighted local text features:
 
-`top_k` is a maximum, not a required result count.
+- title and concepts have high weight;
+- keywords and use case have high weight;
+- methodology has medium weight;
+- year, master level, and track have lower weight;
+- abstract/introduction/conclusion provide additional context.
 
-The service first scores candidate theses, then keeps only sources that are relevant enough. This avoids filling the answer with weak matches when the requested subject is rare.
+The feature vector is hashed into a fixed-size deterministic vector. Query vectors are produced with the same local method.
 
-The default relevance threshold is:
+## Threshold Behavior
 
-```text
-MIAGE_RAG_MIN_SCORE=0.30
-```
+The system does not force an exact number of source theses.
 
-If the variable is not set, the backend uses `0.30`. A lower value returns more sources but can include weak matches. A higher value returns fewer sources but is stricter.
+Example:
 
-The final RAG score combines:
+- user asks for 10 results;
+- only 3 theses are above the relevance threshold;
+- the UI shows 3 theses, not 10 weak matches.
 
-- deterministic local embedding similarity;
-- sparse lexical overlap;
-- title, concept, keyword, use case, year, level, and track metadata signals;
-- domain filters such as the medical/health domain;
-- specific evidence from non-generic query terms.
+This matters for rare topics such as medicine, fraud, quantum computing, or a specific methodology.
 
-Generic terms such as `AI`, `machine learning`, `model`, `classification`, and `detection` are useful for ranking but are not enough by themselves when the question also contains a more specific clue. For example, a question about `League of Legends` should not return unrelated machine-learning theses only to reach `top_k=5`.
+## UI Behavior
 
-The final filter also extracts anchor clues from the original question. For example, `blockchain security` keeps `blockchain` as the anchor and does not accept a thesis only because it mentions general security. Concepts and keywords still help ranking, but when an abstract is available the final evidence check prefers stronger fields: title, use case, and abstract.
+The RAG page shows:
 
-For domain questions, the domain filter uses stronger evidence than the general ranking text. When an abstract exists, domain evidence comes from title plus abstract. When the abstract is missing, it falls back to title plus reviewed use case. This reduces the impact of noisy concepts or keywords in older extracted rows.
+- answer text;
+- source theses;
+- relevance score;
+- thesis profile button;
+- PDF open button;
+- pagination;
+- maximum 20 sources per page.
 
-## Build
+The `Show all results` option means "show all relevant results above the threshold", not "show every thesis in the database".
+
+## Scripts
 
 ```powershell
 python scripts/build_embeddings.py
 python scripts/validate_embeddings.py
+python scripts/evaluate_rag_benchmark.py
+python scripts/evaluate_rag_comprehensive.py
 ```
 
-The full pipeline also builds and validates embeddings:
+`build_embeddings.py` is a sanity command. Embeddings are built in memory from Neo4j rows and are not persisted to a separate database table.
 
-```powershell
-python scripts/run_pipeline.py
-```
+## Limitations
 
-## API
+The current RAG version is metadata-first. It is accurate for questions that can be answered from extracted thesis metadata. It is not designed to answer detailed questions that require reading every page of a PDF.
 
-Semantic retrieval:
+Future improvements can add:
 
-```text
-POST /api/rag/search
-```
-
-Answer with cited sources:
-
-```text
-POST /api/rag/answer
-```
-
-Example body:
-
-```json
-{
-  "question": "Which theses are related to fraud detection with machine learning?",
-  "top_k": 5,
-  "min_score": 0.3,
-  "use_llm": false
-}
-```
-
-`min_score` is optional. When omitted, the backend uses `MIAGE_RAG_MIN_SCORE` or the built-in default `0.30`.
-
-The response includes the score and threshold:
-
-```json
-{
-  "top_k": 5,
-  "min_score": 0.3,
-  "count": 2,
-  "total": 2,
-  "results": [
-    {
-      "thesis_id": "thesis_0001",
-      "title": "Example title",
-      "score": 0.8421
-    }
-  ]
-}
-```
-
-If `use_llm` is false, the backend returns a deterministic local answer from the retrieved sources. If `use_llm` is true, the backend tries Ollama and falls back to the local answer when Ollama is unavailable.
-
-When `all_results` is true, the endpoint returns all relevant sources above the threshold with server-side pagination. Each page is capped at 20 sources.
-
-## Import Integration
-
-When a new PDF is approved from the Import PDFs screen, the app updates:
-
-- SQLite `documents`
-- `data/processed/theses.csv`
-- Knowledge Graph tables and exports
-- `document_embeddings`
-
-This keeps RAG search aligned with the current approved dataset.
-
-## Current Limitation
-
-This version retrieves at thesis level, not page or paragraph level. That is deliberate because the validated comparable information is mostly in the first pages and metadata fields. Full-text chunking can be added later when the project needs precise passage-level answers.
-
-The score is a local ranking signal, not an academic confidence score. It is useful for comparing sources inside the same RAG answer, but it should not be interpreted as an absolute quality grade for a thesis.
+- optional chunk-level PDF retrieval;
+- hybrid graph + text retrieval;
+- stronger local embedding models;
+- local LLM answer synthesis through Ollama.

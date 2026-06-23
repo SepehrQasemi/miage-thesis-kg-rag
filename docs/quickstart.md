@@ -1,66 +1,33 @@
-# Quick Start
+# Quickstart
 
-This guide is for someone who downloads the project from GitHub and wants to run it locally.
+This application is Neo4j-first. Neo4j stores thesis metadata, import drafts, graph nodes, and graph relationships.
 
-## 1. Install Requirements
+The filesystem stores PDFs and generated artifacts:
 
-Install Python 3.11 or newer.
+- `data/raw/theses_pdf`: approved PDFs;
+- `data/staging`: temporary uploaded PDFs;
+- `data/processed/theses.csv`: exported dataset;
+- `data/graph`: graph CSV/JSON snapshots;
+- `data/reports`: validation and quality reports.
 
-Optional:
+## Windows Setup
 
-- Install Ollama if you want local LLM suggestions during PDF import review.
-- Pull the recommended model:
+Start Neo4j:
 
 ```powershell
-python scripts/setup_ollama.py --install --pull --model qwen2.5:7b
+docker compose up -d neo4j
 ```
 
-The model can be several GB. The app still works without Ollama; only LLM suggestions are disabled.
-
-## 2. Setup
-
-On Windows, run:
+Install and initialize:
 
 ```bat
 setup_windows.cmd
 ```
 
-The Windows setup asks whether to install Ollama and pull `qwen2.5:7b`.
-
-To install the LLM dependency later:
-
-```bat
-setup_ollama_windows.cmd
-```
-
-Manual setup:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python scripts/setup_project.py --install-deps --install-playwright
-```
-
-The setup script:
-
-- creates the local data folders;
-- creates `.env` from `.env.example` when missing;
-- initializes `data/app.sqlite`;
-- creates empty graph, CSV, and RAG embedding outputs so the UI can start immediately.
-
-## 3. Start The App
-
-On Windows:
+Start the app:
 
 ```bat
 run_app_windows.cmd
-```
-
-Manual:
-
-```powershell
-python scripts/run_web_app.py --port 8000
 ```
 
 Open:
@@ -69,66 +36,76 @@ Open:
 http://127.0.0.1:8000
 ```
 
-## 4. Add PDFs
-
-Preferred workflow:
-
-1. Open the `Import PDFs` screen.
-2. Upload one thesis PDF, or select several PDFs at once in the same file picker.
-3. Review the extracted metadata for each draft in the import queue.
-4. Optionally generate local LLM suggestions.
-5. Apply suggestions only if they look correct.
-6. Click `Approve`.
-
-Approve updates the SQLite database, CSV export, Knowledge Graph, and RAG embeddings together.
-
-Alternative batch workflow:
+## Manual Setup
 
 ```powershell
-python scripts/setup_project.py --build-data
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+docker compose up -d neo4j
+python scripts/setup_project.py --install-playwright
+python scripts/doctor.py
+python scripts/run_web_app.py --port 8000
 ```
 
-Use this only after placing PDFs in:
+## Environment
+
+Use `.env.example` as the template:
 
 ```text
-data/raw/theses_pdf/
+MIAGE_NEO4J_URI=bolt://127.0.0.1:7687
+MIAGE_NEO4J_USER=neo4j
+MIAGE_NEO4J_PASSWORD=miage-rag-2026
+MIAGE_NEO4J_DATABASE=
+MIAGE_MAX_UPLOAD_MB=100
 ```
 
-## 5. Ask Questions With RAG
+Neo4j Browser:
 
-Open the `Ask / RAG` screen and ask a question over the approved thesis metadata.
-
-`Max results` is only a maximum. The app may return fewer sources if only a few theses are relevant enough. By default, sources must have a RAG score of at least `0.30`.
-
-You can tune the threshold with:
-
-```powershell
-$env:MIAGE_RAG_MIN_SCORE="0.30"
+```text
+http://127.0.0.1:7474
 ```
 
-Lower values return more sources. Higher values return fewer but stricter sources. The UI shows each source score so the ranking is visible during testing.
+## Add Theses
 
-## 6. Check The Installation
+Use the web UI:
+
+1. Open `Import PDFs`.
+2. Select one PDF or multiple PDFs.
+3. Review extracted metadata.
+4. Approve valid drafts.
+5. The app copies approved PDFs to `data/raw/theses_pdf`.
+6. Neo4j is rebuilt with the new thesis metadata and graph relationships.
+7. CSV exports, graph snapshots, and reports are regenerated.
+
+## Check The Installation
 
 ```powershell
 python scripts/doctor.py
-python -m pytest
+python scripts/export_csv.py
+python scripts/validate_dataset.py
+python scripts/build_knowledge_graph.py
+python scripts/validate_knowledge_graph.py
+python scripts/validate_embeddings.py
 ```
 
-`doctor.py` checks Python, dependencies, database, graph outputs, RAG embeddings, raw PDFs, and optional Ollama availability.
+## Run Tests
 
-## 7. Common Problems
+```powershell
+python -m pytest -q
+```
 
-If Playwright tests fail because Chromium is missing:
+For UI tests, install Playwright Chromium first:
 
 ```powershell
 python -m playwright install chromium
 ```
 
-If LLM suggestions show Ollama as unavailable:
+## Optional Ollama
+
+Ollama is optional. The app works without it. If installed, it can provide local extraction review suggestions.
 
 ```powershell
 python scripts/setup_ollama.py --install --pull --model qwen2.5:7b
 ```
-
-Manual review and approval still work without Ollama.

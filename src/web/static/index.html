@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MIAGE Thesis Knowledge Graph</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260618-rag-pagination" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260621-graph-map" />
   </head>
   <body>
     <div class="app-shell">
@@ -21,6 +21,9 @@
           <button class="nav-item active" data-view="dashboard" type="button">
             Dashboard
           </button>
+          <button class="nav-item" data-view="graph" type="button">
+            Knowledge Graph
+          </button>
           <button class="nav-item" data-view="search" type="button">
             Thesis Search
           </button>
@@ -36,11 +39,14 @@
           <button class="nav-item" data-view="import" type="button">
             Import PDFs
           </button>
+          <button class="nav-item" data-view="help" type="button">
+            Help
+          </button>
         </nav>
 
         <div class="sidebar-status">
           <span class="status-dot"></span>
-          <span>Local SQLite graph</span>
+          <span id="graph-backend-label">Local graph</span>
         </div>
       </aside>
 
@@ -82,6 +88,37 @@
               <div id="top-methodologies" class="rank-list compact"></div>
             </section>
           </div>
+        </section>
+
+        <section id="graph-view" class="view">
+          <section class="graph-workspace">
+            <div class="graph-toolbar">
+              <div>
+                <h3>Knowledge Graph Map</h3>
+                <span id="graph-map-status" class="muted">Loading graph...</span>
+              </div>
+              <div class="graph-controls">
+                <label for="graph-thesis-limit">
+                  Visible theses
+                  <span id="graph-thesis-limit-value">60</span>
+                </label>
+                <input id="graph-thesis-limit" type="range" min="20" max="100" step="10" value="60" />
+                <button class="secondary-button" id="graph-reload-button" type="button">Reload graph</button>
+              </div>
+            </div>
+
+            <div class="graph-layout">
+              <div class="graph-canvas-shell">
+                <svg id="knowledge-graph-svg" role="img" aria-label="Interactive knowledge graph visualization"></svg>
+              </div>
+              <aside class="graph-inspector" id="graph-inspector">
+                <h3>Graph Inspector</h3>
+                <div class="empty-state">Select a node to inspect its metadata and direct connections.</div>
+              </aside>
+            </div>
+
+            <div class="graph-legend" id="graph-legend" aria-label="Graph legend"></div>
+          </section>
         </section>
 
         <section id="search-view" class="view">
@@ -329,6 +366,61 @@
               <div id="review-empty" class="empty-state">Process a PDF to review extracted metadata.</div>
             </section>
           </div>
+        </section>
+
+        <section id="help-view" class="view">
+          <section class="panel help-panel">
+            <div class="panel-header">
+              <div>
+                <h3>Using The Application</h3>
+                <span class="muted">Operational guide for importing, searching, graph exploration, and RAG.</span>
+              </div>
+            </div>
+
+            <div class="help-grid">
+              <article class="help-block">
+                <h4>1. Start And Check</h4>
+                <p>Start Neo4j, run the app, then use the dashboard to confirm the graph is loaded.</p>
+                <code>docker compose up -d neo4j</code>
+                <code>python scripts/doctor.py</code>
+              </article>
+
+              <article class="help-block">
+                <h4>2. Import PDFs</h4>
+                <p>Open Import PDFs, select one or more files, review extracted fields, then approve or discard each draft.</p>
+                <ul>
+                  <li>Only valid PDF content is accepted.</li>
+                  <li>Duplicate files are detected automatically.</li>
+                  <li>Approved metadata is stored in Neo4j.</li>
+                </ul>
+              </article>
+
+              <article class="help-block">
+                <h4>3. Search Theses</h4>
+                <p>Use Thesis Search for title, concept, keyword, use-case, methodology, year, level, and track filtering.</p>
+                <p>Open a thesis profile to inspect graph links and access the source PDF.</p>
+              </article>
+
+              <article class="help-block">
+                <h4>4. Explore The Graph</h4>
+                <p>Use Knowledge Graph to inspect how theses connect to concepts, methods, use cases, years, levels, and tracks.</p>
+                <p>Click any node to see direct connections in the inspector.</p>
+              </article>
+
+              <article class="help-block">
+                <h4>5. Ask / RAG</h4>
+                <p>Ask questions over thesis metadata. The system shows only sources above the relevance threshold.</p>
+                <p>Use Show all results for paginated relevant sources instead of forcing weak matches.</p>
+              </article>
+
+              <article class="help-block">
+                <h4>6. Export And Validate</h4>
+                <p>Use Dataset to view, copy, or download CSV. Maintenance commands read from Neo4j.</p>
+                <code>python scripts/validate_dataset.py</code>
+                <code>python scripts/validate_knowledge_graph.py</code>
+              </article>
+            </div>
+          </section>
         </section>
       </main>
     </div>

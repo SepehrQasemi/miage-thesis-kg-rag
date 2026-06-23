@@ -8,8 +8,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from common.db import connect, init_schema
-from common.paths import db_path, graph_dir, reports_dir
+from common.paths import graph_dir, reports_dir
+from graph.neo4j_store import Neo4jGraphQueryService
 from graph.knowledge_graph import EDGE_TYPES, NODE_TYPES, REQUIRED_THESIS_EDGE_TYPES
 
 
@@ -27,22 +27,14 @@ def issue(severity: str, item_type: str, item_id: str, problem: str, value: Any 
     }
 
 
-def load_graph_tables() -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    with connect(db_path()) as conn:
-        init_schema(conn)
-        documents = [
-            dict(row)
-            for row in conn.execute(
-                """
-                SELECT thesis_id, title
-                FROM documents
-                WHERE status = 'active'
-                ORDER BY thesis_id
-                """
-            ).fetchall()
-        ]
-        nodes = [dict(row) for row in conn.execute("SELECT * FROM graph_nodes ORDER BY node_id").fetchall()]
-        edges = [dict(row) for row in conn.execute("SELECT * FROM graph_edges ORDER BY edge_id").fetchall()]
+def load_graph_records() -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    service = Neo4jGraphQueryService()
+    service.verify_connectivity()
+    documents = [
+        {"thesis_id": row.get("thesis_id"), "title": row.get("title")}
+        for row in service.document_rows()
+    ]
+    nodes, edges = service.graph_records()
     return documents, nodes, edges
 
 
@@ -131,11 +123,11 @@ def validate_graph(
     if nodes_csv_count is None:
         issues.append(issue("ERROR", "file", str(graph_dir() / "nodes.csv"), "missing_nodes_csv"))
     elif nodes_csv_count != len(nodes):
-        issues.append(issue("ERROR", "file", str(graph_dir() / "nodes.csv"), "nodes_csv_count_mismatch", f"csv={nodes_csv_count}; db={len(nodes)}"))
+        issues.append(issue("ERROR", "file", str(graph_dir() / "nodes.csv"), "nodes_csv_count_mismatch", f"csv={nodes_csv_count}; neo4j={len(nodes)}"))
     if edges_csv_count is None:
         issues.append(issue("ERROR", "file", str(graph_dir() / "edges.csv"), "missing_edges_csv"))
     elif edges_csv_count != len(edges):
-        issues.append(issue("ERROR", "file", str(graph_dir() / "edges.csv"), "edges_csv_count_mismatch", f"csv={edges_csv_count}; db={len(edges)}"))
+        issues.append(issue("ERROR", "file", str(graph_dir() / "edges.csv"), "edges_csv_count_mismatch", f"csv={edges_csv_count}; neo4j={len(edges)}"))
 
     node_counts = Counter(text(node.get("node_type")) for node in nodes)
     edge_counts = Counter(text(edge.get("edge_type")) for edge in edges)
@@ -154,7 +146,7 @@ def validate_graph(
 
 
 def main() -> None:
-    documents, nodes, edges = load_graph_tables()
+    documents, nodes, edges = load_graph_records()
     issues, summary = validate_graph(documents, nodes, edges)
 
     reports_dir().mkdir(parents=True, exist_ok=True)

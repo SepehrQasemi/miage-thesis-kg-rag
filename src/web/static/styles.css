@@ -220,6 +220,247 @@ textarea {
   grid-column: 1 / -1;
 }
 
+.graph-workspace {
+  display: grid;
+  gap: 16px;
+}
+
+.graph-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: end;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.graph-toolbar h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.compact-status {
+  display: inline-flex;
+  min-height: 30px;
+  margin-top: 0;
+  align-items: center;
+  padding: 6px 9px;
+}
+
+.graph-controls {
+  display: grid;
+  grid-template-columns: minmax(150px, 190px) minmax(160px, 220px) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.graph-controls label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 40px;
+}
+
+#graph-thesis-limit-value {
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 800;
+}
+
+#graph-thesis-limit {
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.graph-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.graph-canvas-shell,
+.graph-inspector {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.graph-canvas-shell {
+  min-height: 620px;
+  overflow: hidden;
+}
+
+#knowledge-graph-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 620px;
+  background:
+    linear-gradient(#edf2f7 1px, transparent 1px),
+    linear-gradient(90deg, #edf2f7 1px, transparent 1px),
+    #fbfcfd;
+  background-size: 42px 42px;
+  touch-action: none;
+}
+
+.graph-edge {
+  stroke: #b7c2cf;
+  stroke-width: 1.1;
+  stroke-opacity: 0.62;
+}
+
+.graph-edge.selected {
+  stroke: #172b3d;
+  stroke-width: 2.4;
+  stroke-opacity: 0.9;
+}
+
+.graph-edge.dimmed {
+  stroke-opacity: 0.12;
+}
+
+.graph-node {
+  cursor: pointer;
+  outline: none;
+}
+
+.graph-node circle {
+  stroke: #ffffff;
+  stroke-width: 2;
+  filter: drop-shadow(0 3px 8px rgba(20, 32, 46, 0.18));
+  transition: stroke 0.14s ease, stroke-width 0.14s ease, opacity 0.14s ease;
+}
+
+.graph-node:hover circle,
+.graph-node:focus circle,
+.graph-node.selected circle {
+  stroke: #14202e;
+  stroke-width: 3;
+}
+
+.graph-node.dimmed {
+  opacity: 0.24;
+}
+
+.graph-node-label {
+  fill: #14202e;
+  paint-order: stroke;
+  stroke: #fbfcfd;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  font-size: 11px;
+  font-weight: 760;
+  text-anchor: middle;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+
+.graph-node.labelled .graph-node-label,
+.graph-node:hover .graph-node-label,
+.graph-node:focus .graph-node-label,
+.graph-node.selected .graph-node-label {
+  opacity: 1;
+}
+
+.graph-inspector {
+  min-height: 620px;
+  max-height: 620px;
+  overflow: auto;
+  padding: 16px;
+}
+
+.graph-inspector h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.graph-inspector-title {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.graph-inspector-title strong {
+  font-size: 17px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.graph-inspector-title span:last-child {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.graph-type-pill {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.graph-inspector-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.graph-neighbour {
+  width: 100%;
+  cursor: pointer;
+  color: var(--text);
+  text-align: left;
+}
+
+.graph-neighbour:hover {
+  border-color: rgba(29, 111, 143, 0.45);
+  background: #f3fbfd;
+}
+
+.graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.graph-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.graph-legend-item strong {
+  color: var(--text);
+}
+
+.graph-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
 .panel-header {
   display: flex;
   flex-wrap: wrap;
@@ -810,6 +1051,55 @@ tbody tr.selected {
   display: none !important;
 }
 
+.help-panel {
+  max-width: 1180px;
+}
+
+.help-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.help-block {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  background: #fff;
+}
+
+.help-block h4 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.help-block p,
+.help-block li {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.help-block ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.help-block code {
+  display: block;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #eff4f7;
+  color: #213143;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .import-grid {
   display: grid;
   grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
@@ -1077,8 +1367,19 @@ tbody tr.selected {
   .content-split,
   .concepts-split,
   .rag-results-grid,
+  .graph-layout,
   .import-grid {
     grid-template-columns: 1fr;
+  }
+
+  .graph-canvas-shell,
+  .graph-inspector,
+  #knowledge-graph-svg {
+    min-height: 520px;
+  }
+
+  .graph-inspector {
+    max-height: none;
   }
 
   .rag-controls {
@@ -1187,6 +1488,7 @@ tbody tr.selected {
   .dataset-actions,
   .toolbar,
   .rag-controls,
+  .graph-controls,
   .form-grid,
   .profile-meta-grid,
   .suggestion-item,
@@ -1194,6 +1496,33 @@ tbody tr.selected {
   .metric-grid,
   .rank-list.compact {
     grid-template-columns: 1fr;
+  }
+
+  .graph-toolbar {
+    padding: 14px;
+  }
+
+  .graph-controls {
+    width: 100%;
+  }
+
+  .graph-controls label {
+    min-height: 28px;
+  }
+
+  .graph-canvas-shell,
+  .graph-inspector,
+  #knowledge-graph-svg {
+    min-height: 430px;
+  }
+
+  .graph-inspector {
+    padding: 14px;
+  }
+
+  .graph-inspector-actions > * {
+    flex: 1 1 100%;
+    width: 100%;
   }
 
   .metric-card {

@@ -8,8 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from common.db import connect, init_schema
-from common.paths import db_path, raw_pdf_dir, reports_dir
+from common.paths import raw_pdf_dir, reports_dir
+from common.pipeline_outputs import rebuild_graph_outputs_from_rows
 from extraction.field_extractor import (
     classify_methodology,
     classify_use_case,
@@ -22,6 +22,7 @@ from extraction.field_extractor import (
 from extraction.pdf_reader import read_pdf_text
 from extraction.section_detector import extract_sections
 from nlp.keyword_extractor import extract_keywords_for_corpus, normalize_concepts
+from graph.neo4j_store import Neo4jGraphQueryService
 
 
 def sha256_file(path: Path) -> str:
@@ -112,43 +113,6 @@ def build_record(pdf_path: Path, enable_ocr: bool = True) -> dict:
         "_semantic_text": keyword_text,
         "_source_notes": pdf_data.get("ocr_notes", []),
     }
-
-
-def upsert_document(conn, record: dict) -> None:
-    fields = [
-        "thesis_id",
-        "file_name",
-        "file_path",
-        "sha256",
-        "pages_count",
-        "cover_text",
-        "abstract",
-        "introduction",
-        "conclusion",
-        "year",
-        "title",
-        "master_level",
-        "track",
-        "keywords",
-        "concepts",
-        "use_case",
-        "methodology",
-        "extraction_confidence",
-        "needs_review",
-        "status",
-        "extraction_notes",
-        "processed_at",
-    ]
-    placeholders = ", ".join("?" for _ in fields)
-    updates = ", ".join(f"{field}=excluded.{field}" for field in fields if field != "thesis_id")
-    sql = f"""
-    INSERT INTO documents ({", ".join(fields)})
-    VALUES ({placeholders})
-    ON CONFLICT(thesis_id) DO UPDATE SET
-        {updates},
-        updated_at=CURRENT_TIMESTAMP
-    """
-    conn.execute(sql, [record.get(field) for field in fields])
 
 
 def write_quality_report(records: list[dict]) -> Path:
@@ -252,28 +216,36 @@ def main() -> None:
     if args.limit:
         pdf_files = pdf_files[: args.limit]
 
+    graph_service = Neo4jGraphQueryService()
+    graph_service.verify_connectivity()
+    existing_rows = graph_service.document_rows()
+    existing_by_id = {str(row.get("thesis_id")): row for row in existing_rows}
+
     records = []
     semantic_texts = {}
-    with connect(db_path()) as conn:
-        init_schema(conn)
-        for pdf_path in pdf_files:
-            thesis_id = thesis_id_from_name(pdf_path)
-            existing = conn.execute("SELECT id FROM documents WHERE thesis_id = ?", (thesis_id,)).fetchone()
-            if existing and not args.force:
-                continue
-            record = build_record(pdf_path, enable_ocr=not args.no_ocr)
-            records.append(record)
-            semantic_texts[record["thesis_id"]] = record["_semantic_text"]
+    for pdf_path in pdf_files:
+        thesis_id = thesis_id_from_name(pdf_path)
+        if thesis_id in existing_by_id and not args.force:
+            continue
+        record = build_record(pdf_path, enable_ocr=not args.no_ocr)
+        records.append(record)
+        semantic_texts[record["thesis_id"]] = record["_semantic_text"]
 
-        keyword_map = extract_keywords_for_corpus(semantic_texts, limit=10)
-        final_records = []
-        for record in records:
-            keywords = keyword_map.get(record["thesis_id"], [])
-            concepts = normalize_concepts(record["_semantic_text"], keywords, limit=8)
-            final_record = finalize_record(record, keywords, concepts)
-            upsert_document(conn, final_record)
-            final_records.append(final_record)
-        conn.commit()
+    keyword_map = extract_keywords_for_corpus(semantic_texts, limit=10)
+    final_records = []
+    for record in records:
+        keywords = keyword_map.get(record["thesis_id"], [])
+        concepts = normalize_concepts(record["_semantic_text"], keywords, limit=8)
+        final_record = finalize_record(record, keywords, concepts)
+        final_records.append(final_record)
+
+    if final_records:
+        processed_ids = {record["thesis_id"] for record in final_records}
+        merged_rows = [row for row in existing_rows if row.get("thesis_id") not in processed_ids]
+        merged_rows.extend(final_records)
+        merged_rows.sort(key=lambda row: str(row.get("thesis_id") or ""))
+        graph_service.replace_with_documents(merged_rows)
+        rebuild_graph_outputs_from_rows(graph_service.document_rows())
 
     report_path = write_quality_report(final_records)
     print(f"PDFs selected: {len(pdf_files)}")

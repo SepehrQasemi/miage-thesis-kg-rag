@@ -5,8 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from common.db import connect, init_schema
-from common.paths import db_path
+from common.pipeline_outputs import rebuild_graph_outputs_from_rows
 from extraction.field_extractor import (
     confidence_score,
     extract_master_level,
@@ -14,6 +13,7 @@ from extraction.field_extractor import (
     extract_track,
     is_valid_title,
 )
+from graph.neo4j_store import Neo4jGraphQueryService
 
 
 def valid_master_level(value: str | None) -> str:
@@ -66,57 +66,59 @@ def preserved_tags(notes: str | None) -> list[str]:
 
 def main() -> None:
     changed = 0
-    with connect(db_path()) as conn:
-        init_schema(conn)
-        rows = conn.execute("SELECT * FROM documents ORDER BY thesis_id").fetchall()
-        for sqlite_row in rows:
-            row = dict(sqlite_row)
-            updates = {}
+    graph_service = Neo4jGraphQueryService()
+    graph_service.verify_connectivity()
+    rows = graph_service.document_rows()
+    repaired_rows = []
+    for original in rows:
+        row = dict(original)
+        updates = {}
 
-            candidate_title = extract_title(row.get("cover_text") or "")
-            if candidate_title and not is_valid_title(row.get("title") or ""):
-                row["title"] = candidate_title
-                updates["title"] = candidate_title
-            elif candidate_title and "title_repaired:rules" in (row.get("extraction_notes") or "") and candidate_title != (row.get("title") or ""):
-                row["title"] = candidate_title
-                updates["title"] = candidate_title
-            elif row.get("title") and not is_valid_title(row.get("title") or ""):
-                row["title"] = ""
-                updates["title"] = ""
+        candidate_title = extract_title(row.get("cover_text") or "")
+        if candidate_title and not is_valid_title(row.get("title") or ""):
+            row["title"] = candidate_title
+            updates["title"] = candidate_title
+        elif candidate_title and "title_repaired:rules" in (row.get("extraction_notes") or "") and candidate_title != (row.get("title") or ""):
+            row["title"] = candidate_title
+            updates["title"] = candidate_title
+        elif row.get("title") and not is_valid_title(row.get("title") or ""):
+            row["title"] = ""
+            updates["title"] = ""
 
-            current_master = valid_master_level(row.get("master_level"))
-            if not current_master:
-                detected_master = extract_master_level((row.get("cover_text") or "") + "\n" + (row.get("file_name") or ""))
-                row["master_level"] = detected_master
-                if detected_master != (sqlite_row["master_level"] or ""):
-                    updates["master_level"] = detected_master
+        current_master = valid_master_level(row.get("master_level"))
+        if not current_master:
+            detected_master = extract_master_level((row.get("cover_text") or "") + "\n" + (row.get("file_name") or ""))
+            row["master_level"] = detected_master
+            if detected_master != (original.get("master_level") or ""):
+                updates["master_level"] = detected_master
 
-            current_track = valid_track(row.get("track"))
-            if not current_track:
-                detected_track = extract_track(row.get("cover_text") or "")
-                row["track"] = detected_track
-                if detected_track != (sqlite_row["track"] or ""):
-                    updates["track"] = detected_track
+        current_track = valid_track(row.get("track"))
+        if not current_track:
+            detected_track = extract_track(row.get("cover_text") or "")
+            row["track"] = detected_track
+            if detected_track != (original.get("track") or ""):
+                updates["track"] = detected_track
 
-            if not updates:
-                continue
-
+        if updates:
             confidence, needs_review, missing_notes = recompute(row)
-            tags = preserved_tags(sqlite_row["extraction_notes"])
+            tags = preserved_tags(original.get("extraction_notes"))
             if "title_repaired:rules" not in tags:
                 tags.append("title_repaired:rules")
-            updates.update(
+            row.update(
                 {
+                    **updates,
                     "extraction_confidence": confidence,
                     "needs_review": needs_review,
                     "extraction_notes": "; ".join(part for part in [missing_notes, *tags] if part),
                     "updated_at": datetime.now().isoformat(timespec="seconds"),
                 }
             )
-            set_clause = ", ".join(f"{key}=?" for key in updates)
-            conn.execute(f"UPDATE documents SET {set_clause} WHERE id=?", [*updates.values(), row["id"]])
             changed += 1
-        conn.commit()
+        repaired_rows.append(row)
+
+    if changed:
+        graph_service.replace_with_documents(repaired_rows)
+        rebuild_graph_outputs_from_rows(graph_service.document_rows())
 
     print(f"Rows repaired: {changed}")
 

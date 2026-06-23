@@ -5,8 +5,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from common.db import connect, init_schema
-from common.paths import db_path, reports_dir
+from common.paths import reports_dir
+from graph.neo4j_store import Neo4jGraphQueryService
 
 
 QUALITY_COLUMNS = [
@@ -31,25 +31,18 @@ QUALITY_COLUMNS = [
 
 
 def main() -> None:
+    service = Neo4jGraphQueryService()
+    service.verify_connectivity()
+    rows = service.document_rows()
+
     reports_dir().mkdir(parents=True, exist_ok=True)
     output = reports_dir() / "extraction_quality.csv"
-    with connect(db_path()) as conn:
-        init_schema(conn)
-        rows = conn.execute(
-            """
-            SELECT *
-            FROM documents
-            WHERE status = 'active'
-            ORDER BY thesis_id
-            """
-        ).fetchall()
-
     with output.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=QUALITY_COLUMNS)
         writer.writeheader()
         for row in rows:
             required_fields_complete = all(
-                bool(row[field])
+                bool(row.get(field))
                 for field in [
                     "title",
                     "year",
@@ -63,23 +56,23 @@ def main() -> None:
             )
             writer.writerow(
                 {
-                    "thesis_id": row["thesis_id"],
-                    "file_name": row["file_name"],
-                    "pages_count": row["pages_count"],
+                    "thesis_id": row.get("thesis_id", ""),
+                    "file_name": row.get("file_name", ""),
+                    "pages_count": row.get("pages_count", ""),
                     "required_fields_complete": required_fields_complete,
-                    "title_found": bool(row["title"]),
-                    "year_found": bool(row["year"]),
-                    "master_level_found": bool(row["master_level"]),
-                    "track_found": bool(row["track"]),
+                    "title_found": bool(row.get("title")),
+                    "year_found": bool(row.get("year")),
+                    "master_level_found": bool(row.get("master_level")),
+                    "track_found": bool(row.get("track")),
                     "abstract_required": False,
-                    "abstract_found": bool(row["abstract"]),
-                    "keywords_found": bool(row["keywords"]),
-                    "concepts_found": bool(row["concepts"]),
-                    "use_case_found": bool(row["use_case"]),
-                    "methodology_found": bool(row["methodology"]),
-                    "extraction_confidence": row["extraction_confidence"],
-                    "needs_review": bool(row["needs_review"]),
-                    "extraction_notes": row["extraction_notes"],
+                    "abstract_found": bool(row.get("abstract")),
+                    "keywords_found": bool(row.get("keywords")),
+                    "concepts_found": bool(row.get("concepts")),
+                    "use_case_found": bool(row.get("use_case")),
+                    "methodology_found": bool(row.get("methodology")),
+                    "extraction_confidence": row.get("extraction_confidence", ""),
+                    "needs_review": bool(row.get("needs_review")),
+                    "extraction_notes": row.get("extraction_notes", ""),
                 }
             )
     print(f"Quality rows: {len(rows)}")

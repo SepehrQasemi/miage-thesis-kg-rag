@@ -12,9 +12,6 @@ from pathlib import Path
 import pytest
 from pypdf import PdfWriter
 
-from common.db import connect, init_schema
-from graph.knowledge_graph import build_knowledge_graph
-
 playwright = pytest.importorskip("playwright.sync_api")
 sync_playwright = playwright.sync_playwright
 expect = playwright.expect
@@ -40,46 +37,12 @@ def document(thesis_id: str, title: str, concepts: str, year: str = "2025", trac
     }
 
 
-def seed_database(db_file: Path) -> None:
-    rows = [
+def seed_rows() -> list[dict]:
+    return [
         document("thesis_0001", "Cancer detection", "machine learning; detection; sante"),
         document("thesis_0002", "Medical AI", "IA; detection; sante"),
         document("thesis_0003", "Cloud security", "cybersecurite; cloud computing; detection", year="2024", track="classique"),
     ]
-    graph = build_knowledge_graph(rows, related_min_shared_concepts=2)
-    with connect(db_file) as conn:
-        init_schema(conn)
-        for row in rows:
-            conn.execute(
-                """
-                INSERT INTO documents (
-                    thesis_id, file_name, file_path, sha256, pages_count, year, title,
-                    master_level, track, abstract, keywords, concepts, use_case,
-                    methodology, extraction_confidence, status
-                )
-                VALUES (
-                    :thesis_id, :file_name, :file_path, :sha256, :pages_count, :year, :title,
-                    :master_level, :track, :abstract, :keywords, :concepts, :use_case,
-                    :methodology, :extraction_confidence, 'active'
-                )
-                """,
-                row,
-            )
-        conn.executemany(
-            """
-            INSERT INTO graph_nodes (node_id, node_type, label, slug, source, properties_json)
-            VALUES (:node_id, :node_type, :label, :slug, :source, :properties_json)
-            """,
-            [node.to_record() for node in graph.sorted_nodes()],
-        )
-        conn.executemany(
-            """
-            INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, weight, source, properties_json)
-            VALUES (:edge_id, :source_id, :target_id, :edge_type, :weight, :source, :properties_json)
-            """,
-            [edge.to_record() for edge in graph.sorted_edges()],
-        )
-        conn.commit()
 
 
 def sample_pdf_file(tmp_path: Path, file_name: str = "renewable_energy_prediction.pdf") -> Path:
@@ -140,27 +103,38 @@ def wait_for_server(url: str, timeout: float = 15.0) -> None:
 @pytest.fixture(scope="module")
 def e2e_server(tmp_path_factory):
     temp_root = tmp_path_factory.mktemp("web-ui")
-    db_file = temp_root / "app.sqlite"
-    seed_database(db_file)
     port = free_port()
     env = os.environ.copy()
-    env["MIAGE_APP_DB"] = str(db_file)
+    env["MIAGE_TEST_ROWS_JSON"] = json.dumps(seed_rows())
     env["MIAGE_RAW_PDF_DIR"] = str(temp_root / "raw_pdf")
     env["MIAGE_STAGING_DIR"] = str(temp_root / "staging")
     env["MIAGE_PROCESSED_DIR"] = str(temp_root / "processed")
     env["MIAGE_GRAPH_DIR"] = str(temp_root / "graph")
     env["MIAGE_REPORTS_DIR"] = str(temp_root / "reports")
     env["MIAGE_IMPORT_OCR"] = "0"
+    repo = Path(__file__).resolve().parents[1]
+    server_code = f"""
+import json
+import os
+import sys
+import uvicorn
+from pathlib import Path
+
+repo = Path(r"{repo}")
+sys.path.insert(0, str(repo))
+sys.path.insert(0, str(repo / "src"))
+
+from tests.fake_graph_service import FakeGraphService
+from web import app as web_app
+
+graph_service = FakeGraphService(json.loads(os.environ["MIAGE_TEST_ROWS_JSON"]))
+web_app.service = lambda: graph_service
+web_app._RAG_SERVICES.clear()
+uvicorn.run(web_app.app, host="127.0.0.1", port={port}, log_level="warning")
+"""
     process = subprocess.Popen(
-        [
-            sys.executable,
-            "scripts/run_web_app.py",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-        ],
-        cwd=Path(__file__).resolve().parents[1],
+        [sys.executable, "-c", server_code],
+        cwd=repo,
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -197,6 +171,32 @@ def test_dashboard_renders_graph_metrics(page):
     assert page.locator("#metric-grid").get_by_text("Concepts").is_visible()
     assert page.locator("#top-concepts").get_by_text("machine learning").is_visible()
     assert page.locator(".nav-icon").count() == 0
+
+
+def test_help_page_documents_main_workflows(page):
+    page.get_by_role("button", name="Help").click()
+
+    expect(page.get_by_role("heading", name="Help")).to_be_visible()
+    expect(page.locator("#help-view")).to_contain_text("Import PDFs")
+    expect(page.locator("#help-view")).to_contain_text("Ask / RAG")
+    expect(page.locator("#help-view")).to_contain_text("python scripts/doctor.py")
+
+
+def test_knowledge_graph_map_renders_nodes_legend_and_inspector(page):
+    page.get_by_role("button", name="Knowledge Graph").click()
+
+    expect(page.locator("#graph-map-status")).to_contain_text("visible nodes", timeout=15000)
+    expect(page.locator("#knowledge-graph-svg .graph-node").first).to_be_visible()
+    assert page.locator("#knowledge-graph-svg .graph-node").count() >= 8
+    assert page.locator("#knowledge-graph-svg .graph-edge").count() >= 6
+    expect(page.locator("#graph-legend")).to_contain_text("Thesis")
+    expect(page.locator("#graph-legend")).to_contain_text("Concept")
+
+    page.locator("#knowledge-graph-svg .graph-node").first.click()
+
+    expect(page.locator("#graph-inspector")).not_to_contain_text("Select a node")
+    expect(page.locator("#graph-inspector .graph-inspector-title strong")).to_be_visible()
+    expect(page.locator("#graph-inspector")).to_contain_text("Connections")
 
 
 def test_search_filter_and_detail_panel(page):
@@ -604,7 +604,7 @@ def test_import_review_approval_workflow(page, tmp_path):
 
 
 def test_responsive_views_use_mobile_and_tablet_layouts(page):
-    view_buttons = ["Dashboard", "Thesis Search", "Concepts", "Dataset", "Ask / RAG", "Import PDFs"]
+    view_buttons = ["Dashboard", "Knowledge Graph", "Thesis Search", "Concepts", "Dataset", "Ask / RAG", "Import PDFs"]
     viewports = [
         {"width": 320, "height": 720},
         {"width": 360, "height": 760},
@@ -627,6 +627,8 @@ def test_responsive_views_use_mobile_and_tablet_layouts(page):
                     const mainRect = document.querySelector(".main").getBoundingClientRect();
                     const toolbar = document.querySelector("#search-view.active .toolbar");
                     const ragControls = document.querySelector("#rag-view.active .rag-controls");
+                    const graphControls = document.querySelector("#graph-view.active .graph-controls");
+                    const graphLayout = document.querySelector("#graph-view.active .graph-layout");
                     const metricGrid = document.querySelector("#dashboard-view.active .metric-grid");
                     const pagination = document.querySelector(".view.active .pagination-controls");
 
@@ -651,6 +653,8 @@ def test_responsive_views_use_mobile_and_tablet_layouts(page):
                         navButtonHeight: navButton.getBoundingClientRect().height,
                         toolbarColumns: columnCount(toolbar),
                         ragColumns: columnCount(ragControls),
+                        graphControlColumns: columnCount(graphControls),
+                        graphLayoutColumns: columnCount(graphLayout),
                         metricColumns: columnCount(metricGrid),
                         paginationWraps: pagination ? getComputedStyle(pagination).flexWrap : "",
                     };
@@ -676,6 +680,9 @@ def test_responsive_views_use_mobile_and_tablet_layouts(page):
                     assert metrics["toolbarColumns"] == 1
                 if button_name == "Ask / RAG":
                     assert metrics["ragColumns"] == 1
+                if button_name == "Knowledge Graph":
+                    assert metrics["graphControlColumns"] == 1
+                    assert metrics["graphLayoutColumns"] == 1
             elif viewport["width"] <= 1100:
                 assert metrics["navDisplay"] == "grid"
                 assert metrics["navButtonHeight"] >= 42
@@ -685,6 +692,8 @@ def test_responsive_views_use_mobile_and_tablet_layouts(page):
                     assert metrics["toolbarColumns"] == 2
                 if button_name == "Ask / RAG":
                     assert metrics["ragColumns"] == 2
+                if button_name == "Knowledge Graph":
+                    assert metrics["graphLayoutColumns"] == 1
 
 
 def test_mobile_rag_profile_modal_fits_viewport(page):

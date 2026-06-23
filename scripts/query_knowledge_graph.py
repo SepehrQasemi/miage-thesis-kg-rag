@@ -8,7 +8,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from graph.query import GraphQueryService
+from graph.neo4j_store import Neo4jGraphQueryService
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -70,7 +70,7 @@ def output_rows(rows: list[dict[str, Any]], columns: list[str], output: str, csv
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Query the local MIAGE thesis Knowledge Graph.")
+    parser = argparse.ArgumentParser(description="Query the Neo4j MIAGE thesis Knowledge Graph.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     summary_parser = subparsers.add_parser("summary", help="Show graph node and edge counts.")
@@ -118,7 +118,8 @@ def main() -> None:
     search_parser.add_argument("--csv", default=None, help="Optional CSV output path.")
 
     args = parser.parse_args()
-    service = GraphQueryService()
+    service = Neo4jGraphQueryService()
+    service.verify_connectivity()
 
     try:
         if args.command == "summary":

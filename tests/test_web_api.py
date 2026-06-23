@@ -3,11 +3,9 @@ import io
 from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 
-from common.db import connect, init_schema
-from graph.knowledge_graph import build_knowledge_graph
-from graph.query import GraphQueryService
 from ingestion import import_workflow
 from llm.import_review import LLMUnavailableError
+from tests.fake_graph_service import FakeGraphService
 from web import app as web_app
 
 
@@ -31,58 +29,23 @@ def document(thesis_id: str, title: str, concepts: str) -> dict:
     }
 
 
-def seed_database(db_file):
-    rows = [
+def seed_rows():
+    return [
         document("thesis_0001", "Cancer detection", "machine learning; detection; sante"),
         document("thesis_0002", "Medical AI", "IA; detection; sante"),
     ]
-    graph = build_knowledge_graph(rows, related_min_shared_concepts=2)
-    with connect(db_file) as conn:
-        init_schema(conn)
-        for row in rows:
-            conn.execute(
-                """
-                INSERT INTO documents (
-                    thesis_id, file_name, file_path, sha256, pages_count, year, title,
-                    master_level, track, abstract, keywords, concepts, use_case,
-                    methodology, extraction_confidence, status
-                )
-                VALUES (
-                    :thesis_id, :file_name, :file_path, :sha256, :pages_count, :year, :title,
-                    :master_level, :track, :abstract, :keywords, :concepts, :use_case,
-                    :methodology, :extraction_confidence, 'active'
-                )
-                """,
-                row,
-            )
-        conn.executemany(
-            """
-            INSERT INTO graph_nodes (node_id, node_type, label, slug, source, properties_json)
-            VALUES (:node_id, :node_type, :label, :slug, :source, :properties_json)
-            """,
-            [node.to_record() for node in graph.sorted_nodes()],
-        )
-        conn.executemany(
-            """
-            INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, weight, source, properties_json)
-            VALUES (:edge_id, :source_id, :target_id, :edge_type, :weight, :source, :properties_json)
-            """,
-            [edge.to_record() for edge in graph.sorted_edges()],
-        )
-        conn.commit()
 
 
 def client_for(tmp_path, monkeypatch):
-    db_file = tmp_path / "web.sqlite"
-    seed_database(db_file)
-    monkeypatch.setenv("MIAGE_APP_DB", str(db_file))
+    graph_service = FakeGraphService(seed_rows())
     monkeypatch.setenv("MIAGE_RAW_PDF_DIR", str(tmp_path / "raw_pdf"))
     monkeypatch.setenv("MIAGE_STAGING_DIR", str(tmp_path / "staging"))
     monkeypatch.setenv("MIAGE_PROCESSED_DIR", str(tmp_path / "processed"))
     monkeypatch.setenv("MIAGE_GRAPH_DIR", str(tmp_path / "graph"))
     monkeypatch.setenv("MIAGE_REPORTS_DIR", str(tmp_path / "reports"))
-    monkeypatch.setattr(web_app, "service", lambda: GraphQueryService(db_file))
-    return TestClient(web_app.app)
+    monkeypatch.setattr(web_app, "service", lambda: graph_service)
+    web_app._RAG_SERVICES.clear()
+    return TestClient(web_app.app), graph_service
 
 
 def sample_pdf_bytes(title: str = "Sample thesis") -> bytes:
@@ -108,7 +71,7 @@ def stub_pdf_text(monkeypatch):
 
 
 def test_summary_endpoint_returns_graph_counts(tmp_path, monkeypatch):
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     response = client.get("/api/summary")
 
@@ -119,7 +82,7 @@ def test_summary_endpoint_returns_graph_counts(tmp_path, monkeypatch):
 
 
 def test_thesis_detail_endpoint_includes_similar_theses(tmp_path, monkeypatch):
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     response = client.get("/api/theses/thesis_0001")
 
@@ -130,7 +93,7 @@ def test_thesis_detail_endpoint_includes_similar_theses(tmp_path, monkeypatch):
 
 
 def test_filtered_thesis_search_uses_graph_filters(tmp_path, monkeypatch):
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     response = client.get("/api/theses", params={"concept": "machine learning", "track": "apprentissage"})
 
@@ -139,7 +102,7 @@ def test_filtered_thesis_search_uses_graph_filters(tmp_path, monkeypatch):
 
 
 def test_paginated_thesis_search_returns_total_and_page_size(tmp_path, monkeypatch):
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     response = client.get("/api/theses/page", params={"page": 1, "page_size": 1})
 
@@ -159,7 +122,7 @@ def test_paginated_thesis_search_returns_total_and_page_size(tmp_path, monkeypat
 
 
 def test_paginated_thesis_search_limits_page_size_to_twenty(tmp_path, monkeypatch):
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     response = client.get("/api/theses/page", params={"page_size": 21})
 
@@ -167,7 +130,7 @@ def test_paginated_thesis_search_limits_page_size_to_twenty(tmp_path, monkeypatc
 
 
 def test_dataset_endpoint_returns_complete_csv_rows(tmp_path, monkeypatch):
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     response = client.get("/api/dataset")
 
@@ -180,7 +143,7 @@ def test_dataset_endpoint_returns_complete_csv_rows(tmp_path, monkeypatch):
 
 
 def test_dataset_csv_download_returns_export_file(tmp_path, monkeypatch):
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     response = client.get("/api/dataset.csv")
 
@@ -191,8 +154,25 @@ def test_dataset_csv_download_returns_export_file(tmp_path, monkeypatch):
     assert "thesis_0001" in body
 
 
+def test_graph_map_endpoint_returns_visible_subgraph(tmp_path, monkeypatch):
+    client, graph_service = client_for(tmp_path, monkeypatch)
+
+    response = client.get("/api/graph/map", params={"thesis_limit": 20, "concept_limit": 8})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["backend"] == "neo4j"
+    assert data["stats"]["source_documents"] == 2
+    assert data["stats"]["visible_nodes"] >= 5
+    assert data["stats"]["visible_edges"] >= 4
+    node_types = {node["type"] for node in data["nodes"]}
+    assert {"Thesis", "Concept", "UseCase", "Methodology"} <= node_types
+    assert any(node["metadata"].get("thesis_id") == "thesis_0001" for node in data["nodes"] if node["type"] == "Thesis")
+    assert all(edge["type"] != "RELATED_TO" for edge in data["edges"])
+
+
 def test_rag_search_endpoint_returns_semantic_sources(tmp_path, monkeypatch):
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     response = client.post("/api/rag/search", json={"question": "health detection with machine learning", "top_k": 1})
 
@@ -205,25 +185,16 @@ def test_rag_search_endpoint_returns_semantic_sources(tmp_path, monkeypatch):
 
 
 def test_rag_search_endpoint_uses_result_count_as_maximum(tmp_path, monkeypatch):
-    db_file = tmp_path / "web.sqlite"
-    seed_database(db_file)
-    with connect(db_file) as conn:
-        conn.execute(
-            """
-            UPDATE documents
-            SET title = 'Cloud security',
-                keywords = 'cybersecurite; cloud computing; detection',
-                concepts = 'cybersecurite; cloud computing; detection',
-                use_case = 'cybersecurite / detection d''attaques'
-            WHERE thesis_id = 'thesis_0002'
-            """
-        )
-        conn.commit()
-    monkeypatch.setenv("MIAGE_APP_DB", str(db_file))
-    monkeypatch.setenv("MIAGE_RAW_PDF_DIR", str(tmp_path / "raw_pdf"))
-    monkeypatch.setattr(web_app, "service", lambda: GraphQueryService(db_file))
+    client, graph_service = client_for(tmp_path, monkeypatch)
+    graph_service.rows[1].update(
+        {
+            "title": "Cloud security",
+            "keywords": "cybersecurite; cloud computing; detection",
+            "concepts": "cybersecurite; cloud computing; detection",
+            "use_case": "cybersecurite / detection d'attaques",
+        }
+    )
     web_app._RAG_SERVICES.clear()
-    client = TestClient(web_app.app)
 
     response = client.post("/api/rag/search", json={"question": "cloud security", "top_k": 5})
 
@@ -237,7 +208,7 @@ def test_rag_search_endpoint_uses_result_count_as_maximum(tmp_path, monkeypatch)
 
 
 def test_rag_search_all_results_is_paginated_to_twenty_max(tmp_path, monkeypatch):
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     response = client.post(
         "/api/rag/search",
@@ -265,7 +236,7 @@ def test_rag_search_all_results_is_paginated_to_twenty_max(tmp_path, monkeypatch
 
 
 def test_rag_search_all_results_rejects_page_size_above_twenty(tmp_path, monkeypatch):
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     response = client.post(
         "/api/rag/search",
@@ -276,7 +247,7 @@ def test_rag_search_all_results_rejects_page_size_above_twenty(tmp_path, monkeyp
 
 
 def test_rag_answer_endpoint_uses_local_answer_by_default(tmp_path, monkeypatch):
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     response = client.post("/api/rag/answer", json={"question": "medical AI detection", "top_k": 2})
 
@@ -288,7 +259,7 @@ def test_rag_answer_endpoint_uses_local_answer_by_default(tmp_path, monkeypatch)
 
 
 def test_rag_endpoint_rejects_invalid_user_input(tmp_path, monkeypatch):
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     response = client.post("/api/rag/search", json={"question": "a", "top_k": 0})
 
@@ -296,7 +267,7 @@ def test_rag_endpoint_rejects_invalid_user_input(tmp_path, monkeypatch):
 
 
 def test_rag_answer_falls_back_when_ollama_unavailable(tmp_path, monkeypatch):
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     def unavailable(*_args, **_kwargs):
         raise RuntimeError("Ollama offline")
@@ -317,7 +288,7 @@ def test_rag_answer_falls_back_when_ollama_unavailable(tmp_path, monkeypatch):
 
 def test_import_upload_creates_review_draft(tmp_path, monkeypatch):
     stub_pdf_text(monkeypatch)
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     response = client.post(
         "/api/imports",
@@ -331,9 +302,64 @@ def test_import_upload_creates_review_draft(tmp_path, monkeypatch):
     assert data["draft"]["fields"]["year"] == "2026"
 
 
+def test_import_rejects_spoofed_pdf_payload(tmp_path, monkeypatch):
+    client, graph_service = client_for(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/api/imports",
+        files={"file": ("spoofed.pdf", b"not a pdf", "application/pdf")},
+    )
+
+    assert response.status_code == 400
+    assert "valid PDF" in response.json()["detail"]
+    assert len(graph_service.document_rows()) == 2
+
+
+def test_import_rejects_files_over_configured_size_limit(tmp_path, monkeypatch):
+    client, graph_service = client_for(tmp_path, monkeypatch)
+    monkeypatch.setenv("MIAGE_MAX_UPLOAD_MB", "1")
+
+    response = client.post(
+        "/api/imports",
+        files={"file": ("large.pdf", b"%PDF-" + (b"x" * (1024 * 1024 + 1)), "application/pdf")},
+    )
+
+    assert response.status_code == 400
+    assert "larger than 1 MB" in response.json()["detail"]
+    assert len(graph_service.document_rows()) == 2
+
+
+def test_import_sanitizes_path_traversal_filename_on_approval(tmp_path, monkeypatch):
+    stub_pdf_text(monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
+    upload = client.post(
+        "/api/imports",
+        files={"file": ("..\\..\\unsafe thesis.pdf", sample_pdf_bytes(), "application/pdf")},
+    )
+    draft = upload.json()["draft"]
+    fields = draft["fields"]
+    fields.update(
+        {
+            "title": "Safe uploaded thesis",
+            "keywords": "machine learning; detection",
+            "concepts": "machine learning; detection",
+            "use_case": "sante / aide au diagnostic",
+            "methodology": "classification experimentale",
+        }
+    )
+
+    response = client.post(f"/api/imports/{draft['draft_id']}/approve", json=fields)
+
+    assert response.status_code == 200
+    file_name = response.json()["file_name"]
+    assert "/" not in file_name
+    assert "\\" not in file_name
+    assert (tmp_path / "raw_pdf" / file_name).exists()
+
+
 def test_batch_import_creates_unique_review_drafts(tmp_path, monkeypatch):
     stub_pdf_text(monkeypatch)
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
 
     response = client.post(
         "/api/imports/batch",
@@ -355,9 +381,9 @@ def test_batch_import_creates_unique_review_drafts(tmp_path, monkeypatch):
     assert {draft["draft_id"] for draft in drafts}
 
 
-def test_import_approval_updates_database_csv_and_graph(tmp_path, monkeypatch):
+def test_import_approval_updates_neo4j_csv_and_graph(tmp_path, monkeypatch):
     stub_pdf_text(monkeypatch)
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
     upload = client.post(
         "/api/imports",
         files={"file": ("new_thesis.pdf", sample_pdf_bytes(), "application/pdf")},
@@ -382,13 +408,10 @@ def test_import_approval_updates_database_csv_and_graph(tmp_path, monkeypatch):
     assert (tmp_path / "processed" / "theses.csv").exists()
     assert (tmp_path / "graph" / "nodes.csv").exists()
     assert (tmp_path / "graph" / "edges.csv").exists()
-    with connect(tmp_path / "web.sqlite") as conn:
-        row = conn.execute("SELECT title FROM documents WHERE thesis_id = 'thesis_0003'").fetchone()
-        node_count = conn.execute("SELECT COUNT(*) AS count FROM graph_nodes WHERE node_type = 'Thesis'").fetchone()
-        embedding_count = conn.execute("SELECT COUNT(*) AS count FROM document_embeddings").fetchone()
+    row = next(row for row in graph_service.document_rows() if row["thesis_id"] == "thesis_0003")
     assert row["title"] == "Cancer detection with machine learning"
-    assert node_count["count"] == 3
-    assert embedding_count["count"] == 3
+    assert len(graph_service.document_rows()) == 3
+    assert response.json()["embedding_outputs"]["backend"] == "neo4j"
 
     duplicate = client.post(
         "/api/imports",
@@ -399,16 +422,16 @@ def test_import_approval_updates_database_csv_and_graph(tmp_path, monkeypatch):
     assert duplicate.json()["duplicate"]["thesis_id"] == "thesis_0003"
 
 
-def test_import_llm_suggestions_do_not_update_database(tmp_path, monkeypatch):
+def test_import_llm_suggestions_do_not_update_neo4j_documents(tmp_path, monkeypatch):
     stub_pdf_text(monkeypatch)
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
     upload = client.post(
         "/api/imports",
         files={"file": ("new_thesis.pdf", sample_pdf_bytes(), "application/pdf")},
     )
     draft = upload.json()["draft"]
 
-    def fake_suggestions(draft_id, fields, model=None):
+    def fake_suggestions(draft_id, fields, model=None, **_kwargs):
         assert draft_id == draft["draft_id"]
         assert fields["title"] == draft["fields"]["title"]
         return {
@@ -441,14 +464,12 @@ def test_import_llm_suggestions_do_not_update_database(tmp_path, monkeypatch):
     data = response.json()
     assert data["status"] == "suggested"
     assert data["suggestions"]["title"] == "Cancer detection with local LLM"
-    with connect(tmp_path / "web.sqlite") as conn:
-        count = conn.execute("SELECT COUNT(*) AS count FROM documents").fetchone()
-    assert count["count"] == 2
+    assert len(graph_service.document_rows()) == 2
 
 
 def test_import_llm_unavailable_is_non_blocking(tmp_path, monkeypatch):
     stub_pdf_text(monkeypatch)
-    client = client_for(tmp_path, monkeypatch)
+    client, graph_service = client_for(tmp_path, monkeypatch)
     upload = client.post(
         "/api/imports",
         files={"file": ("new_thesis.pdf", sample_pdf_bytes(), "application/pdf")},

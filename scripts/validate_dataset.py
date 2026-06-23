@@ -10,8 +10,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from common.db import connect, init_schema
-from common.paths import db_path, processed_dir, raw_pdf_dir, reports_dir
+from common.paths import processed_dir, raw_pdf_dir, reports_dir
+from graph.neo4j_store import Neo4jGraphQueryService
 
 
 REQUIRED_FIELDS = [
@@ -77,12 +77,15 @@ def suspicious_title_problems(title: str) -> list[str]:
     return problems
 
 
-def read_exported_csv() -> list[dict[str, str]]:
+def read_exported_csv() -> tuple[list[dict[str, str]], str]:
     csv_path = processed_dir() / "theses.csv"
     if not csv_path.exists():
-        return []
-    with csv_path.open(encoding="utf-8-sig", newline="") as f:
-        return list(csv.DictReader(f))
+        return [], ""
+    try:
+        with csv_path.open(encoding="utf-8-sig", newline="") as f:
+            return list(csv.DictReader(f)), ""
+    except (UnicodeDecodeError, csv.Error) as exc:
+        return [], f"{type(exc).__name__}: {exc}"
 
 
 def validate_rows(rows: list[dict[str, Any]], allow_subset: bool) -> tuple[list[dict[str, str]], dict[str, Any]]:
@@ -136,15 +139,25 @@ def validate_rows(rows: list[dict[str, Any]], allow_subset: bool) -> tuple[list[
             )
         )
 
-    exported_rows = read_exported_csv()
+    exported_rows, exported_error = read_exported_csv()
+    if exported_error:
+        issues.append(
+            issue(
+                "",
+                "ERROR",
+                "processed_csv",
+                "exported_csv_unreadable",
+                exported_error,
+            )
+        )
     if exported_rows and len(exported_rows) != active_count:
         issues.append(
             issue(
                 "",
                 "ERROR",
                 "processed_csv",
-                "exported_csv_count_does_not_match_database_count",
-                f"csv={len(exported_rows)}; db={active_count}",
+                "exported_csv_count_does_not_match_neo4j_count",
+                f"csv={len(exported_rows)}; neo4j={active_count}",
             )
         )
 
@@ -170,19 +183,9 @@ def main() -> None:
     parser.add_argument("--allow-subset", action="store_true", help="Allow DB row count to be smaller than raw PDF count.")
     args = parser.parse_args()
 
-    with connect(db_path()) as conn:
-        init_schema(conn)
-        rows = [
-            dict(row)
-            for row in conn.execute(
-                """
-                SELECT *
-                FROM documents
-                WHERE status = 'active'
-                ORDER BY thesis_id
-                """
-            ).fetchall()
-        ]
+    service = Neo4jGraphQueryService()
+    service.verify_connectivity()
+    rows = service.document_rows()
 
     reports_dir().mkdir(parents=True, exist_ok=True)
     issues, summary = validate_rows(rows, allow_subset=args.allow_subset)
