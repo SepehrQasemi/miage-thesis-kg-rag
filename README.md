@@ -186,6 +186,16 @@ or:
 python scripts/setup_ollama.py --install --pull --model qwen2.5:7b
 ```
 
+The default `.env.example` uses CPU-only Ollama generation:
+
+```env
+MIAGE_OLLAMA_NUM_GPU=0
+MIAGE_OLLAMA_NUM_CTX=2048
+MIAGE_OLLAMA_TIMEOUT=300
+```
+
+This is slower than GPU offload, but it avoids CUDA/VRAM failures on small laptop GPUs. On a stronger GPU, set `MIAGE_OLLAMA_NUM_GPU=auto` or another Ollama-supported value.
+
 ### Project Structure
 
 ```text

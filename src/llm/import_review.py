@@ -9,6 +9,7 @@ from typing import Any
 
 from graph.neo4j_store import Neo4jGraphQueryService
 from ingestion.import_workflow import load_draft, save_draft
+from llm.ollama_client import build_ollama_options
 
 
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
@@ -60,9 +61,9 @@ def call_ollama(model: str, prompt: str, url: str, timeout: int) -> dict[str, An
     payload = {
         "model": model,
         "prompt": prompt,
-        "format": "json",
+        "raw": True,
         "stream": False,
-        "options": {"temperature": 0},
+        "options": build_ollama_options("IMPORT", default_num_predict=260),
     }
     request = urllib.request.Request(
         url,
@@ -91,15 +92,12 @@ def build_prompt(draft: dict[str, Any], fields: dict[str, Any]) -> str:
         "current_extraction": compact_fields(fields),
         "current_confidence": draft.get("extraction_confidence", 0),
         "current_notes": draft.get("extraction_notes", ""),
-        "front_pages_text": compact(draft.get("cover_text_preview", ""), 3200),
+        "front_pages_text": compact(draft.get("cover_text_preview", ""), 800),
     }
     return f"""
-You are reviewing metadata extracted from a French MIAGE master's thesis PDF.
-
-Use only the provided front-pages text and current extraction. Do not invent unsupported facts.
-Return only compact JSON. No markdown.
-
-Required JSON shape:
+Review metadata from a French MIAGE master's thesis PDF.
+Use only Input. Do not invent unsupported facts.
+Return only this compact JSON shape, with no markdown and no extra keys:
 {{
   "title": "string",
   "year": "YYYY or N/A",
@@ -115,19 +113,27 @@ Required JSON shape:
 }}
 
 Rules:
-- title is the thesis subject, not the author, university, program name, table of contents, or acknowledgements.
-- year must be the defense/submission year when visible; otherwise N/A.
-- master_level must be exactly M1, M2, or N/A.
-- track must be exactly apprentissage, classique, or N/A.
-- If the student is not in apprentissage, use classique.
-- keywords and concepts must be short comparable terms separated as JSON arrays.
-- use_case must be a practical application domain, for example "sante / aide au diagnostic" or "cybersecurite / detection d'attaques".
-- methodology must be a short method label, for example "comparaison experimentale", "revue de litterature / etat de l'art", or "analyse de donnees".
-- abstract must stay empty unless the provided text contains a real Resume/Abstract or enough explicit summary text.
-- confidence is your confidence that the suggested fields are supported by the text, from 0 to 1.
+- title: thesis subject only, not author/university/program/table of contents.
+- year: visible defense/submission year, else N/A.
+- master_level: exactly M1, M2, or N/A.
+- track: exactly apprentissage, classique, or N/A. If no apprentissage/alternance evidence, use classique. MIAGE/university names are not track.
+- keywords/concepts: short comparable JSON arrays.
+- use_case: derive mainly from title, Resume/Abstract, and front_pages_text. Do not copy a label from current_extraction if it conflicts with the visible subject.
+- methodology: short method label such as "comparaison experimentale", "revue de litterature / etat de l'art", or "analyse de donnees".
+- abstract: empty unless a real Resume/Abstract or explicit summary is visible.
+- confidence: number from 0 to 1.
+- Preserve current_extraction values when supported by front_pages_text.
+
+Domain hints for use_case:
+- inondations, hydrologie, climat, catastrophe naturelle -> environnement / prediction des risques naturels
+- fraude, transaction bancaire, risque financier -> finance / detection de fraude
+- cybersecurite, attaque, intrusion -> cybersecurite / detection d'attaques
+- medical, sante, diagnostic, patient, cancer -> sante / aide au diagnostic
+- jeu video, League of Legends, joueur -> jeux video / analyse de parties
 
 Input:
 {json.dumps(source, ensure_ascii=False)}
+JSON:
 """.strip()
 
 

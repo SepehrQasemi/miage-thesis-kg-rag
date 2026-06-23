@@ -109,3 +109,13 @@ Ollama is optional. The app works without it. If installed, it can provide local
 ```powershell
 python scripts/setup_ollama.py --install --pull --model qwen2.5:7b
 ```
+
+For low-VRAM laptops, keep the default CPU-only settings from `.env.example`:
+
+```env
+MIAGE_OLLAMA_NUM_GPU=0
+MIAGE_OLLAMA_NUM_CTX=2048
+MIAGE_OLLAMA_TIMEOUT=300
+```
+
+This makes local LLM suggestions slower but more reliable. Use `MIAGE_OLLAMA_NUM_GPU=auto` only if the machine has enough GPU memory.

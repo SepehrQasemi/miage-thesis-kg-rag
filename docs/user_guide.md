@@ -119,6 +119,15 @@ Ollama is optional.
 
 If Ollama is installed, the import screen can generate local review suggestions. If Ollama is unavailable, manual review still works.
 
+The default configuration runs Ollama on CPU:
+
+```env
+MIAGE_OLLAMA_NUM_GPU=0
+MIAGE_OLLAMA_TIMEOUT=300
+```
+
+This is slower, but it is safer on low-VRAM laptops. On a stronger GPU, this can be changed in `.env`.
+
 ## 9. Useful Maintenance Commands
 
 ```powershell

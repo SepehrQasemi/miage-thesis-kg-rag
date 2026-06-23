@@ -7,6 +7,7 @@ from llm.import_review import (
     parse_json_content,
     review_reasons,
 )
+from llm.ollama_client import build_ollama_options
 
 
 def test_parse_json_content_handles_markdown_fence():
@@ -45,6 +46,33 @@ def test_review_reasons_marks_low_quality_draft():
     assert "few_keywords" in reasons
     assert "few_concepts" in reasons
     assert "low_confidence" in reasons
+
+
+def test_build_ollama_options_defaults_to_cpu(monkeypatch):
+    for key in [
+        "MIAGE_OLLAMA_NUM_GPU",
+        "MIAGE_OLLAMA_NUM_CTX",
+        "MIAGE_OLLAMA_TEMPERATURE",
+        "MIAGE_OLLAMA_RAG_NUM_PREDICT",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    options = build_ollama_options("RAG", default_num_predict=320)
+
+    assert options["temperature"] == 0.0
+    assert options["num_gpu"] == 0
+    assert options["num_ctx"] == 2048
+    assert options["num_predict"] == 320
+
+
+def test_build_ollama_options_allows_task_override(monkeypatch):
+    monkeypatch.setenv("MIAGE_OLLAMA_NUM_GPU", "auto")
+    monkeypatch.setenv("MIAGE_OLLAMA_IMPORT_NUM_PREDICT", "512")
+
+    options = build_ollama_options("IMPORT", default_num_predict=700)
+
+    assert "num_gpu" not in options
+    assert options["num_predict"] == 512
 
 
 def test_call_ollama_reports_unavailable(monkeypatch):

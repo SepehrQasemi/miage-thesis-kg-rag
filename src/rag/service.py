@@ -21,6 +21,7 @@ from rag.embeddings import (
     semantic_expansions,
     split_terms,
 )
+from llm.ollama_client import build_ollama_options
 
 
 QUERY_STOPWORDS = {
@@ -1121,35 +1122,46 @@ def ollama_answer(question: str, results: list[dict[str, Any]], model: str | Non
     model = model or os.environ.get("MIAGE_OLLAMA_MODEL", "qwen2.5:7b")
     url = os.environ.get("MIAGE_OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
     timeout = float(os.environ.get("MIAGE_OLLAMA_TIMEOUT", "90"))
-    context = [
-        {
-            "thesis_id": row["thesis_id"],
-            "title": row["title"],
-            "year": row["year"],
-            "master_level": row["master_level"],
-            "track": row["track"],
-            "concepts": row["concepts"],
-            "keywords": row["keywords"],
-            "use_case": row["use_case"],
-            "methodology": row["methodology"],
-            "abstract": row["abstract"][:900],
-            "score": row["score"],
-        }
-        for row in results
+    llm_sources = results[:3]
+    allowed_ids = [row["thesis_id"] for row in llm_sources]
+    source_lines = [
+        "- {thesis_id}: {title} | year: {year} | level: {level} | track: {track} | use_case: {use_case} | concepts: {concepts} | method: {methodology} | score: {score}".format(
+            thesis_id=row["thesis_id"],
+            title=str(row["title"])[:150],
+            year=row["year"],
+            level=row["master_level"],
+            track=row["track"],
+            use_case=str(row["use_case"])[:120],
+            concepts=str(row["concepts"])[:140],
+            methodology=str(row["methodology"])[:80],
+            score=round(float(row["score"]), 3),
+        )
+        for row in llm_sources
     ]
     prompt = f"""
-You answer questions about MIAGE master's theses.
-Use only the retrieved metadata below. Do not invent sources.
+You answer using only the listed MIAGE thesis sources.
+Max 70 words. Do not invent sources.
 Answer in the same language as the question when possible.
-Cite thesis IDs in the answer.
-
+Allowed IDs: {", ".join(allowed_ids) if allowed_ids else "none"}.
+Copy thesis IDs exactly from Allowed IDs. Never write "theses_".
+If Allowed IDs is not "none", use this format:
+Relevant theses: <IDs>. Reason: <short reason>.
+Only say "no sufficiently relevant thesis was retrieved" when Allowed IDs is "none".
 Question:
 {question}
-
-Retrieved theses:
-{json.dumps(context, ensure_ascii=False, indent=2)}
+Sources:
+{chr(10).join(source_lines) if source_lines else "- no retrieved source"}
+Answer:
 """.strip()
-    body = json.dumps({"model": model, "prompt": prompt, "stream": False}).encode("utf-8")
+    body = json.dumps(
+        {
+            "model": model,
+            "prompt": prompt,
+            "raw": True,
+            "stream": False,
+            "options": build_ollama_options("RAG", default_num_predict=120),
+        }
+    ).encode("utf-8")
     request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -1159,4 +1171,13 @@ Retrieved theses:
     answer = str(payload.get("response") or "").strip()
     if not answer:
         raise RuntimeError("Ollama returned an empty answer.")
+    answer = re.sub(r"\btheses_(\d{4})\b", r"thesis_\1", answer)
+    if allowed_ids:
+        cited_ids = set(re.findall(r"\bthesis_\d{4}\b", answer))
+        allowed_id_set = set(allowed_ids)
+        if not cited_ids:
+            raise RuntimeError("Ollama answer did not cite retrieved thesis IDs.")
+        if not cited_ids.issubset(allowed_id_set):
+            invalid = ", ".join(sorted(cited_ids - allowed_id_set))
+            raise RuntimeError(f"Ollama invented thesis IDs: {invalid}")
     return answer

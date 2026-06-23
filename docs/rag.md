@@ -87,3 +87,5 @@ Future improvements can add:
 - hybrid graph + text retrieval;
 - stronger local embedding models;
 - local LLM answer synthesis through Ollama.
+
+When `Use Ollama` is enabled in the web UI, retrieval still happens first through the local metadata search. Ollama only rewrites/synthesizes the answer from the retrieved thesis metadata and must cite thesis IDs. The default generation options are CPU-only (`MIAGE_OLLAMA_NUM_GPU=0`) to avoid CUDA failures on low-VRAM laptops.
