@@ -171,6 +171,24 @@ def test_graph_map_endpoint_returns_visible_subgraph(tmp_path, monkeypatch):
     assert all(edge["type"] != "RELATED_TO" for edge in data["edges"])
 
 
+def test_graph_map_endpoint_scopes_all_theses_by_selected_categories(tmp_path, monkeypatch):
+    client, graph_service = client_for(tmp_path, monkeypatch)
+
+    response = client.get("/api/graph/map", params={"node_types": "Concept,Year"})
+
+    assert response.status_code == 200
+    data = response.json()
+    node_types = {node["type"] for node in data["nodes"]}
+    thesis_ids = {node["metadata"].get("thesis_id") for node in data["nodes"] if node["type"] == "Thesis"}
+    assert data["stats"]["thesis_scope"] == "all"
+    assert data["stats"]["thesis_limit"] is None
+    assert data["stats"]["selected_node_types"] == ["Concept", "Year"]
+    assert thesis_ids == {"thesis_0001", "thesis_0002"}
+    assert node_types <= {"Thesis", "Concept", "Year"}
+    assert "UseCase" not in node_types
+    assert all(edge["type"] in {"HAS_CONCEPT", "SUBMITTED_IN"} for edge in data["edges"])
+
+
 def test_rag_search_endpoint_returns_semantic_sources(tmp_path, monkeypatch):
     client, graph_service = client_for(tmp_path, monkeypatch)
 

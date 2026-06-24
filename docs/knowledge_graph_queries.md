@@ -93,7 +93,30 @@ Graph search supports:
 
 ## Graph Map
 
-`GET /api/graph/map` returns a capped subgraph for browser rendering. This prevents large databases from rendering too many nodes at once.
+`GET /api/graph/map` supports two rendering modes:
+
+- without `node_types`, it returns a small capped compatibility subgraph;
+- with `node_types`, it returns all thesis nodes and only the requested metadata node types.
+
+Example:
+
+```text
+GET /api/graph/map?node_types=Concept,Year,UseCase
+```
+
+Supported `node_types` values are:
+
+- `Concept`
+- `Keyword`
+- `UseCase`
+- `Methodology`
+- `Year`
+- `MasterLevel`
+- `Track`
+
+When `node_types` is present, `stats.thesis_scope` is `all`, `stats.thesis_limit` is `null`, and `stats.selected_node_types` lists the active categories. This is the mode used by the web interface.
+
+This makes the browser view scalable: all theses remain available, while the user decides whether to analyze concepts, years, use cases, methods, levels, tracks, or keywords.
 
 The full graph remains available in Neo4j and through CLI/API queries.
 

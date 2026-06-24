@@ -182,10 +182,28 @@ def test_help_page_documents_main_workflows(page):
     expect(page.locator("#help-view")).to_contain_text("python scripts/doctor.py")
 
 
+def open_and_load_knowledge_graph(page, categories=("Concept", "Year")):
+    page.get_by_role("button", name="Knowledge Graph").click()
+    expect(page.locator("#graph-map-status")).to_contain_text("Select graph categories")
+    for category in ["Concept", "Year", "UseCase", "Methodology", "MasterLevel", "Track", "Keyword"]:
+        checkbox = page.locator(f'.graph-category-checkbox[value="{category}"]')
+        if category in categories:
+            checkbox.check()
+        else:
+            checkbox.uncheck()
+    page.locator("#graph-load-button").click()
+    expect(page.locator("#graph-map-status")).to_contain_text("theses in map", timeout=15000)
+
+
 def test_knowledge_graph_map_renders_nodes_legend_and_inspector(page):
     page.get_by_role("button", name="Knowledge Graph").click()
 
-    expect(page.locator("#graph-map-status")).to_contain_text("visible nodes", timeout=15000)
+    expect(page.locator("#graph-map-status")).to_contain_text("Select graph categories")
+    expect(page.locator("#knowledge-graph-svg .graph-node")).to_have_count(0)
+    page.locator("#graph-load-button").click()
+
+    expect(page.locator("#graph-map-status")).to_contain_text("theses in map", timeout=15000)
+    expect(page.locator("#graph-thesis-limit")).to_have_count(0)
     expect(page.locator("#knowledge-graph-svg .graph-node").first).to_be_visible()
     assert page.locator("#knowledge-graph-svg .graph-node").count() >= 8
     assert page.locator("#knowledge-graph-svg .graph-edge").count() >= 6
@@ -197,6 +215,70 @@ def test_knowledge_graph_map_renders_nodes_legend_and_inspector(page):
     expect(page.locator("#graph-inspector")).not_to_contain_text("Select a node")
     expect(page.locator("#graph-inspector .graph-inspector-title strong")).to_be_visible()
     expect(page.locator("#graph-inspector")).to_contain_text("Connections")
+
+
+def test_knowledge_graph_filters_reduce_visible_graph(page):
+    open_and_load_knowledge_graph(page, categories=("Concept", "Year", "UseCase"))
+
+    page.locator("#graph-relation-filter").select_option("UseCase")
+    expect(page.locator("#graph-map-status")).to_contain_text("1 active filter")
+    expect(page.locator("#graph-legend")).to_contain_text("Use case")
+    expect(page.locator("#graph-legend")).not_to_contain_text("Concept")
+    assert page.locator("#knowledge-graph-svg .type-usecase").count() >= 1
+
+    page.locator("#graph-clear-filters-button").click()
+    page.locator("#graph-concept-filter").select_option("cloud computing")
+    expect(page.locator("#graph-map-status")).to_contain_text("1 active filter")
+    expect(page.locator("#knowledge-graph-svg .type-thesis")).to_have_count(1)
+    expect(page.locator("#knowledge-graph-svg")).to_contain_text("Cloud security")
+    expect(page.locator("#knowledge-graph-svg")).not_to_contain_text("thesis_0003")
+
+
+def test_knowledge_graph_zoom_controls_change_viewport(page):
+    open_and_load_knowledge_graph(page)
+    expect(page.locator("#knowledge-graph-svg .graph-node").first).to_be_visible(timeout=15000)
+    expect(page.locator("#graph-zoom-label")).to_have_text("100%")
+
+    page.locator("#graph-zoom-in").click()
+    expect(page.locator("#graph-zoom-label")).to_have_text("120%")
+    assert "scale(1.200)" in page.locator("#knowledge-graph-svg .graph-viewport").get_attribute("transform")
+
+    page.locator("#graph-zoom-out").click()
+    expect(page.locator("#graph-zoom-label")).to_have_text("100%")
+
+    page.locator("#graph-zoom-in").click()
+    page.locator("#graph-zoom-reset").click()
+    expect(page.locator("#graph-zoom-label")).to_have_text("100%")
+    assert "scale(1.000)" in page.locator("#knowledge-graph-svg .graph-viewport").get_attribute("transform")
+
+
+def test_knowledge_graph_analysis_links_connect_metadata(page):
+    open_and_load_knowledge_graph(page)
+    expect(page.locator("#knowledge-graph-svg .graph-node").first).to_be_visible(timeout=15000)
+    expect(page.locator("#knowledge-graph-svg .analysis-edge")).to_have_count(0)
+    expect(page.locator("#graph-analysis-pair")).to_have_value("Year:Concept")
+
+    page.locator("#graph-analysis-links").check()
+    expect(page.locator("#graph-map-status")).to_contain_text("analysis links")
+    analysis_edge_count = page.locator("#knowledge-graph-svg .analysis-edge").count()
+    assert 1 <= analysis_edge_count <= 180
+
+    has_year_concept_link = page.evaluate(
+        """
+        () => {
+            const labels = new Map(
+                [...document.querySelectorAll("#knowledge-graph-svg .graph-node")]
+                    .map((node) => [node.dataset.nodeId, node.querySelector("title")?.textContent || ""])
+            );
+            return [...document.querySelectorAll("#knowledge-graph-svg .analysis-edge")].some((edge) => {
+                const endpoints = [labels.get(edge.dataset.source), labels.get(edge.dataset.target)].sort();
+                return endpoints.some((label) => label === "Concept: cloud computing")
+                    && endpoints.some((label) => label === "Year: 2024");
+            });
+        }
+        """
+    )
+    assert has_year_concept_link
 
 
 def test_search_filter_and_detail_panel(page):

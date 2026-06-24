@@ -76,7 +76,15 @@ You can:
 
 Open `Knowledge Graph`.
 
-The graph shows:
+Choose the categories you want to analyze, then click `Load graph`. For example:
+
+- `Concepts` + `Years` to see topic evolution over time;
+- `Concepts` + `Use cases` to compare technical topics with business domains;
+- `Years` + `Use cases` to inspect which domains appear in each year.
+
+The map always uses all thesis rows from Neo4j, but it only loads the selected metadata categories so the browser does not have to render every relationship family at once.
+
+The graph can show:
 
 - thesis nodes;
 - concept nodes;
@@ -86,6 +94,14 @@ The graph shows:
 - year, level, and track nodes.
 
 Click a node to inspect its metadata and direct connections.
+
+Use the graph filters when the map is too dense:
+
+- `Relations shown` keeps only one relationship family, such as concepts or use cases.
+- `Concept`, `Use case`, `Year`, `Level`, and `Track` reduce the visible theses to the selected value.
+- `Selection focus` keeps only the selected node and its direct neighbors.
+- `Analysis links` connects metadata nodes that appear in the same thesis. Choose an `Analysis type`, such as `Year to concepts`, to keep rendering focused and readable.
+- Use `+`, `-`, and `Reset` on the graph canvas to zoom. You can also zoom with the mouse wheel and drag empty graph space to pan.
 
 ## 6. Use RAG
 

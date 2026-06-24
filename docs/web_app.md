@@ -35,7 +35,13 @@ Shows global dataset and graph metrics from Neo4j.
 
 ### Knowledge Graph
 
-Displays a readable capped graph map for the UI. The backend returns a subgraph so the browser remains usable when the dataset grows.
+Displays a scoped graph map for the UI. The user first chooses the metadata categories to load, such as concepts, years, use cases, methods, levels, tracks, or keywords. The backend then returns all thesis nodes plus only the selected metadata categories, so the graph can use the complete thesis dataset without drawing every relationship family at once.
+
+The graph view includes client-side filters for relation type, concept, use case, year, master level, track, and selected-node focus. These filters only change what is drawn in the browser; Neo4j remains the source of truth.
+
+The graph canvas also supports zoom controls, mouse-wheel zoom, reset, and pan by dragging empty canvas space.
+
+`Analysis links` are derived in the browser from visible thesis paths. If a thesis connects to `Year: 2024` and `Concept: cloud computing`, the UI can draw a weighted analysis link between those metadata nodes. This keeps Neo4j's thesis-centered model intact while making cross-metadata analysis readable.
 
 ### Thesis Search
 
@@ -104,6 +110,18 @@ Supports:
 - `POST /api/imports/{draft_id}/approve`
 - `DELETE /api/imports/{draft_id}`
 - `POST /api/imports/{draft_id}/llm-suggestions`
+
+### `GET /api/graph/map`
+
+The graph map endpoint supports category-scoped rendering for the web UI.
+
+Use `node_types` as a comma-separated list when the frontend should load all theses with only selected metadata categories:
+
+```text
+/api/graph/map?node_types=Concept,Year,UseCase
+```
+
+Without `node_types`, the endpoint keeps the older capped compatibility mode. With `node_types`, the response uses `stats.thesis_scope = "all"` and `stats.thesis_limit = null`.
 
 ## Import Approval
 

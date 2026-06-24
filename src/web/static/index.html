@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MIAGE Thesis Knowledge Graph</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260621-graph-map" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260624-graph-categories" />
   </head>
   <body>
     <div class="app-shell">
@@ -95,20 +95,117 @@
             <div class="graph-toolbar">
               <div>
                 <h3>Knowledge Graph Map</h3>
-                <span id="graph-map-status" class="muted">Loading graph...</span>
+                <span id="graph-map-status" class="muted">Select graph categories, then click Load graph.</span>
               </div>
               <div class="graph-controls">
-                <label for="graph-thesis-limit">
-                  Visible theses
-                  <span id="graph-thesis-limit-value">60</span>
-                </label>
-                <input id="graph-thesis-limit" type="range" min="20" max="100" step="10" value="60" />
                 <button class="secondary-button" id="graph-reload-button" type="button">Reload graph</button>
               </div>
             </div>
 
+            <div class="graph-category-panel" aria-label="Knowledge graph category selection">
+              <div class="graph-category-copy">
+                <h4>Choose categories to load</h4>
+                <span id="graph-category-summary" class="muted">2 selected: Concept, Year</span>
+              </div>
+              <div class="graph-category-options">
+                <label class="graph-category-option" for="graph-category-concept">
+                  <input class="graph-category-checkbox" id="graph-category-concept" type="checkbox" value="Concept" checked />
+                  Concepts
+                </label>
+                <label class="graph-category-option" for="graph-category-year">
+                  <input class="graph-category-checkbox" id="graph-category-year" type="checkbox" value="Year" checked />
+                  Years
+                </label>
+                <label class="graph-category-option" for="graph-category-use-case">
+                  <input class="graph-category-checkbox" id="graph-category-use-case" type="checkbox" value="UseCase" />
+                  Use cases
+                </label>
+                <label class="graph-category-option" for="graph-category-methodology">
+                  <input class="graph-category-checkbox" id="graph-category-methodology" type="checkbox" value="Methodology" />
+                  Methods
+                </label>
+                <label class="graph-category-option" for="graph-category-level">
+                  <input class="graph-category-checkbox" id="graph-category-level" type="checkbox" value="MasterLevel" />
+                  Levels
+                </label>
+                <label class="graph-category-option" for="graph-category-track">
+                  <input class="graph-category-checkbox" id="graph-category-track" type="checkbox" value="Track" />
+                  Tracks
+                </label>
+                <label class="graph-category-option" for="graph-category-keyword">
+                  <input class="graph-category-checkbox" id="graph-category-keyword" type="checkbox" value="Keyword" />
+                  Keywords
+                </label>
+              </div>
+              <button class="primary-button" id="graph-load-button" type="button">Load graph</button>
+            </div>
+
+            <div class="graph-filter-panel" aria-label="Knowledge graph filters">
+              <div class="select-wrap">
+                <label for="graph-relation-filter">Relations shown</label>
+                <select id="graph-relation-filter">
+                  <option value="">All relation types</option>
+                  <option value="Concept">Concepts</option>
+                  <option value="UseCase">Use cases</option>
+                  <option value="Methodology">Methodologies</option>
+                  <option value="Year">Years</option>
+                  <option value="MasterLevel">Levels</option>
+                  <option value="Track">Tracks</option>
+                  <option value="Keyword">Keywords</option>
+                </select>
+              </div>
+              <div class="select-wrap">
+                <label for="graph-concept-filter">Concept</label>
+                <select id="graph-concept-filter"></select>
+              </div>
+              <div class="select-wrap">
+                <label for="graph-use-case-filter">Use case</label>
+                <select id="graph-use-case-filter"></select>
+              </div>
+              <div class="select-wrap">
+                <label for="graph-year-filter">Year</label>
+                <select id="graph-year-filter"></select>
+              </div>
+              <div class="select-wrap">
+                <label for="graph-level-filter">Level</label>
+                <select id="graph-level-filter"></select>
+              </div>
+              <div class="select-wrap">
+                <label for="graph-track-filter">Track</label>
+                <select id="graph-track-filter"></select>
+              </div>
+              <label class="graph-focus-toggle" for="graph-selected-only">
+                <input id="graph-selected-only" type="checkbox" />
+                Selection focus
+              </label>
+              <label class="graph-focus-toggle" for="graph-analysis-links">
+                <input id="graph-analysis-links" type="checkbox" />
+                Analysis links
+              </label>
+              <div class="select-wrap">
+                <label for="graph-analysis-pair">Analysis type</label>
+                <select id="graph-analysis-pair">
+                  <option value="Year:Concept">Year to concepts</option>
+                  <option value="Year:UseCase">Year to use cases</option>
+                  <option value="Year:Methodology">Year to methods</option>
+                  <option value="Track:Concept">Track to concepts</option>
+                  <option value="MasterLevel:Concept">Level to concepts</option>
+                  <option value="Concept:UseCase">Concepts to use cases</option>
+                  <option value="Concept:Methodology">Concepts to methods</option>
+                  <option value="All">All metadata links</option>
+                </select>
+              </div>
+              <button class="secondary-button" id="graph-clear-filters-button" type="button">Clear filters</button>
+            </div>
+
             <div class="graph-layout">
               <div class="graph-canvas-shell">
+                <div class="graph-zoom-controls" aria-label="Knowledge graph zoom controls">
+                  <button class="graph-zoom-button" id="graph-zoom-out" type="button" aria-label="Zoom out">-</button>
+                  <span class="graph-zoom-label" id="graph-zoom-label">100%</span>
+                  <button class="graph-zoom-button" id="graph-zoom-in" type="button" aria-label="Zoom in">+</button>
+                  <button class="graph-zoom-reset" id="graph-zoom-reset" type="button">Reset</button>
+                </div>
                 <svg id="knowledge-graph-svg" role="img" aria-label="Interactive knowledge graph visualization"></svg>
               </div>
               <aside class="graph-inspector" id="graph-inspector">
@@ -404,6 +501,10 @@
               <article class="help-block">
                 <h4>4. Explore The Graph</h4>
                 <p>Use Knowledge Graph to inspect how theses connect to concepts, methods, use cases, years, levels, and tracks.</p>
+                <p>Select the metadata categories first, then click Load graph. The map uses all theses but draws only the selected categories.</p>
+                <p>Use graph filters to limit the map by relation type, concept, use case, year, level, track, or the selected node neighborhood.</p>
+                <p>Use Analysis links to connect focused metadata pairs that appear in the same thesis, such as years to concepts.</p>
+                <p>Use zoom controls or the mouse wheel to inspect dense areas. Drag empty graph space to pan the map.</p>
                 <p>Click any node to see direct connections in the inspector.</p>
               </article>
 
@@ -440,6 +541,6 @@
       </div>
     </div>
 
-    <script src="/static/app.js?v=20260618-rag-pagination" type="module"></script>
+    <script src="/static/app.js?v=20260624-graph-categories" type="module"></script>
   </body>
 </html>

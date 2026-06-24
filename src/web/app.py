@@ -93,6 +93,7 @@ GRAPH_MAP_EDGE_TYPES = {
     "HAS_MASTER_LEVEL",
     "HAS_TRACK",
 }
+GRAPH_MAP_SELECTABLE_NODE_TYPES = frozenset(GRAPH_MAP_ENTITY_LIMITS)
 
 
 def graph_backend() -> str:
@@ -126,6 +127,7 @@ def graph_map_payload(
     backend: str,
     thesis_limit: int = 60,
     concept_limit: int = 24,
+    selected_node_types: set[str] | None = None,
 ) -> dict[str, Any]:
     graph = build_knowledge_graph(rows, related_min_shared_concepts=0)
     incoming_counts: Counter[str] = Counter()
@@ -138,18 +140,32 @@ def graph_map_payload(
         if edge.source_id.startswith("thesis:"):
             thesis_targets[edge.source_id].append(edge.target_id)
 
-    entity_limits = {**GRAPH_MAP_ENTITY_LIMITS, "Concept": concept_limit}
     selected_entities: set[str] = set()
-    for node_type, limit in entity_limits.items():
-        candidates = [
-            node
+    if selected_node_types is not None:
+        selected_entities.update(
+            node.node_id
             for node in graph.nodes.values()
-            if node.node_type == node_type and incoming_counts[node.node_id] > 0
+            if node.node_type in selected_node_types and incoming_counts[node.node_id] > 0
+        )
+        selected_theses = [
+            f"thesis:{row.get('thesis_id')}"
+            for row in rows
+            if row.get("thesis_id") and f"thesis:{row.get('thesis_id')}" in graph.nodes
         ]
-        candidates.sort(key=lambda node: (-incoming_counts[node.node_id], node.label.lower()))
-        selected_entities.update(node.node_id for node in candidates[:limit])
+        thesis_scope = "all"
+    else:
+        entity_limits = {**GRAPH_MAP_ENTITY_LIMITS, "Concept": concept_limit}
+        for node_type, limit in entity_limits.items():
+            candidates = [
+                node
+                for node in graph.nodes.values()
+                if node.node_type == node_type and incoming_counts[node.node_id] > 0
+            ]
+            candidates.sort(key=lambda node: (-incoming_counts[node.node_id], node.label.lower()))
+            selected_entities.update(node.node_id for node in candidates[:limit])
+        selected_theses = select_graph_map_theses(rows, thesis_targets, selected_entities, thesis_limit)
+        thesis_scope = "limited"
 
-    selected_theses = select_graph_map_theses(rows, thesis_targets, selected_entities, thesis_limit)
     selected_node_ids = set(selected_entities) | set(selected_theses)
 
     visible_edges = [
@@ -199,10 +215,26 @@ def graph_map_payload(
             "visible_node_counts": dict(sorted(visible_type_counts.items())),
             "node_counts": dict(sorted(node_type_counts.items())),
             "edge_counts": dict(sorted(edge_type_counts.items())),
-            "thesis_limit": thesis_limit,
-            "concept_limit": concept_limit,
+            "thesis_limit": None if selected_node_types is not None else thesis_limit,
+            "concept_limit": None if selected_node_types is not None else concept_limit,
+            "selected_node_types": sorted(selected_node_types) if selected_node_types is not None else [],
+            "thesis_scope": thesis_scope,
         },
     }
+
+
+def parse_graph_node_types(value: str | None) -> set[str] | None:
+    if value is None:
+        return None
+    node_types = {part.strip() for part in value.split(",") if part.strip()}
+    if not node_types:
+        raise HTTPException(status_code=400, detail="Select at least one graph category.")
+    invalid = node_types - GRAPH_MAP_SELECTABLE_NODE_TYPES
+    if invalid:
+        valid_values = ", ".join(sorted(GRAPH_MAP_SELECTABLE_NODE_TYPES))
+        invalid_values = ", ".join(sorted(invalid))
+        raise HTTPException(status_code=400, detail=f"Unsupported graph category: {invalid_values}. Valid values: {valid_values}.")
+    return node_types
 
 
 def select_graph_map_theses(
@@ -320,11 +352,18 @@ def dataset_csv() -> FileResponse:
 
 @app.get("/api/graph/map")
 def graph_map(
-    thesis_limit: Annotated[int, Query(ge=10, le=120)] = 60,
+    thesis_limit: Annotated[int, Query(ge=10, le=1000)] = 60,
     concept_limit: Annotated[int, Query(ge=5, le=50)] = 24,
+    node_types: Annotated[str | None, Query(description="Comma-separated metadata node types to include with all thesis nodes.")] = None,
 ) -> dict[str, Any]:
     rows = service().document_rows()
-    return graph_map_payload(rows, backend=graph_backend(), thesis_limit=thesis_limit, concept_limit=concept_limit)
+    return graph_map_payload(
+        rows,
+        backend=graph_backend(),
+        thesis_limit=thesis_limit,
+        concept_limit=concept_limit,
+        selected_node_types=parse_graph_node_types(node_types),
+    )
 
 
 @app.post("/api/rag/search")

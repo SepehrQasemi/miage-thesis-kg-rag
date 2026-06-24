@@ -124,7 +124,7 @@ MIAGE_MAX_UPLOAD_MB=100
 ### Web App Features
 
 - `Dashboard`: dataset and graph overview.
-- `Knowledge Graph`: interactive graph map for theses, concepts, keywords, use cases, methods, years, levels, and tracks.
+- `Knowledge Graph`: interactive graph map that first asks which metadata categories to load, then maps all theses with the selected concepts, keywords, use cases, methods, years, levels, or tracks. It also includes filters, zoom, and derived analysis links for readable exploration.
 - `Thesis Search`: text search, filters, pagination, and thesis profiles.
 - `Concepts`: concept index and connected theses.
 - `Dataset`: full dataset table with CSV copy/download.
@@ -144,6 +144,14 @@ MIAGE_MAX_UPLOAD_MB=100
 9. Thesis metadata and graph relationships are rebuilt in Neo4j.
 10. CSV, graph snapshots, and reports are regenerated.
 11. RAG immediately sees the new thesis because it reads from Neo4j rows.
+
+### Knowledge Graph Workflow
+
+1. Open `Knowledge Graph`.
+2. Select the metadata categories to analyze before loading the map.
+3. Click `Load graph`.
+4. The map uses all theses from Neo4j, but only draws the selected metadata categories.
+5. Use filters, zoom, selection focus, and analysis links to inspect dense graph areas without loading every relationship family at once.
 
 ### RAG Behavior
 
@@ -284,7 +292,7 @@ python scripts/run_web_app.py --port 8000
 ### Fonctionnalites
 
 - `Dashboard`: vue globale du dataset et du graphe.
-- `Knowledge Graph`: carte interactive des memoires, concepts, mots-cles, cas d'usage, methodes, annees, niveaux et parcours.
+- `Knowledge Graph`: carte interactive qui demande d'abord les categories de metadonnees a charger, puis affiche tous les memoires avec les concepts, mots-cles, cas d'usage, methodes, annees, niveaux ou parcours selectionnes. Elle inclut aussi les filtres, le zoom et les liens d'analyse derives.
 - `Thesis Search`: recherche, filtres, pagination et fiche memoire.
 - `Concepts`: index des concepts et memoires connectes.
 - `Dataset`: table complete et export CSV.
@@ -302,6 +310,14 @@ python scripts/run_web_app.py --port 8000
 7. Reconstruire les noeuds et relations dans Neo4j.
 8. Regenerer les CSV, snapshots et rapports.
 9. Le RAG voit immediatement le nouveau memoire car il lit depuis Neo4j.
+
+### Cycle D'exploration Du Graphe
+
+1. Ouvrir `Knowledge Graph`.
+2. Selectionner les categories de metadonnees a analyser avant de charger la carte.
+3. Cliquer sur `Load graph`.
+4. La carte utilise tous les memoires stockes dans Neo4j, mais dessine uniquement les categories selectionnees.
+5. Utiliser les filtres, le zoom, le focus de selection et les liens d'analyse pour explorer les zones denses sans charger toutes les familles de relations en meme temps.
 
 ### Commandes Utiles
 

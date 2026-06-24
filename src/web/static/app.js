@@ -23,9 +23,27 @@ const state = {
   ragQuestion: "",
   ragAllResults: false,
   graphMap: null,
+  graphMapRaw: null,
+  graphSelectedNodeTypes: [],
+  graphFilters: {
+    relationType: "",
+    concept: "",
+    useCase: "",
+    year: "",
+    masterLevel: "",
+    track: "",
+    selectedOnly: false,
+    analysisLinks: false,
+    analysisPair: "Year:Concept",
+  },
   graphBusy: false,
   selectedGraphNodeId: null,
   graphAnimationFrame: null,
+  graphZoom: {
+    scale: 1,
+    x: 0,
+    y: 0,
+  },
 };
 
 const viewTitles = {
@@ -60,6 +78,21 @@ const graphTypeLabels = {
   MasterLevel: "Level",
   Track: "Track",
 };
+
+const GRAPH_TITLE_LABEL_THRESHOLD = 20;
+const GRAPH_ZOOM_MIN = 0.45;
+const GRAPH_ZOOM_MAX = 3;
+const GRAPH_ZOOM_STEP = 1.2;
+const GRAPH_ANALYSIS_NODE_TYPES = new Set(["Concept", "UseCase", "Methodology", "Year", "MasterLevel", "Track"]);
+const GRAPH_ANALYSIS_NODE_ORDER = {
+  Year: 0,
+  MasterLevel: 1,
+  Track: 2,
+  Concept: 3,
+  UseCase: 4,
+  Methodology: 5,
+};
+const GRAPH_ANALYSIS_LINK_LIMIT = 180;
 
 const api = {
   async get(path) {
@@ -177,9 +210,29 @@ function bindControls() {
   qs("#rag-show-all").addEventListener("change", syncRagControls);
   qs("#rag-previous-page-button").addEventListener("click", () => loadRagSourcesPage(state.ragPage - 1));
   qs("#rag-next-page-button").addEventListener("click", () => loadRagSourcesPage(state.ragPage + 1));
+  qs("#graph-load-button").addEventListener("click", loadGraphMap);
   qs("#graph-reload-button").addEventListener("click", loadGraphMap);
-  qs("#graph-thesis-limit").addEventListener("input", syncGraphControls);
-  qs("#graph-thesis-limit").addEventListener("change", loadGraphMap);
+  qsa(".graph-category-checkbox").forEach((input) => {
+    input.addEventListener("change", handleGraphCategoryChange);
+  });
+  qs("#graph-zoom-in").addEventListener("click", () => zoomGraphBy(GRAPH_ZOOM_STEP));
+  qs("#graph-zoom-out").addEventListener("click", () => zoomGraphBy(1 / GRAPH_ZOOM_STEP));
+  qs("#graph-zoom-reset").addEventListener("click", resetGraphZoom);
+  bindGraphViewportInteractions(qs("#knowledge-graph-svg"));
+  [
+    "#graph-relation-filter",
+    "#graph-concept-filter",
+    "#graph-use-case-filter",
+    "#graph-year-filter",
+    "#graph-level-filter",
+    "#graph-track-filter",
+    "#graph-analysis-pair",
+  ].forEach((selector) => {
+    qs(selector).addEventListener("change", applyGraphFilterControls);
+  });
+  qs("#graph-selected-only").addEventListener("change", applyGraphFilterControls);
+  qs("#graph-analysis-links").addEventListener("change", applyGraphFilterControls);
+  qs("#graph-clear-filters-button").addEventListener("click", clearGraphFilters);
   qs("#profile-close-button").addEventListener("click", closeThesisProfile);
   qs("#profile-modal").addEventListener("click", (event) => {
     if (event.target.id === "profile-modal") closeThesisProfile();
@@ -205,18 +258,21 @@ function setView(view) {
   if (view === "dataset" && state.datasetRows.length === 0) {
     loadDataset();
   }
-  if (view === "graph" && !state.graphMap && !state.graphBusy) {
-    loadGraphMap();
+  if (view === "graph" && !state.graphMapRaw && !state.graphBusy) {
+    renderGraphSetupPrompt();
   }
 }
 
 async function refreshAll() {
   state.graphMap = null;
+  state.graphMapRaw = null;
+  state.graphSelectedNodeTypes = [];
+  state.selectedGraphNodeId = null;
   await Promise.all([loadDashboard(), loadFacets(), loadDataset()]);
   await runSearch({ page: 1 });
   await loadConceptIndex();
   if (state.view === "graph") {
-    await loadGraphMap();
+    renderGraphSetupPrompt();
   }
 }
 
@@ -254,23 +310,25 @@ function renderGraphBackend(backend) {
   qs("#graph-backend-label").textContent = backend === "neo4j" ? "Local Neo4j graph" : "Graph backend";
 }
 
-function syncGraphControls() {
-  qs("#graph-thesis-limit-value").textContent = qs("#graph-thesis-limit").value;
-}
-
 async function loadGraphMap() {
-  const limitInput = qs("#graph-thesis-limit");
-  const thesisLimit = Math.max(20, Math.min(100, Number(limitInput.value || 60)));
-  limitInput.value = String(thesisLimit);
-  syncGraphControls();
+  const nodeTypes = selectedGraphNodeTypes();
+  if (!nodeTypes.length) {
+    state.graphMap = null;
+    state.graphMapRaw = null;
+    state.graphSelectedNodeTypes = [];
+    renderGraphSetupPrompt("Select at least one category before loading the graph.", "error");
+    return;
+  }
   setGraphBusy(true);
-  renderGraphMapStatus("Loading knowledge graph map...", "working");
+  renderGraphMapStatus(`Loading graph with ${nodeTypes.map(graphTypeLabel).join(", ")}...`, "working");
   try {
-    const payload = await api.get(`/api/graph/map?thesis_limit=${thesisLimit}&concept_limit=24`);
-    state.graphMap = payload;
+    const params = new URLSearchParams({ node_types: nodeTypes.join(",") });
+    const payload = await api.get(`/api/graph/map?${params.toString()}`);
+    state.graphMapRaw = payload;
+    state.graphSelectedNodeTypes = nodeTypes;
     state.selectedGraphNodeId = null;
-    renderKnowledgeGraph(payload);
-    renderGraphMapStatus(graphMapSummary(payload), "success");
+    fillGraphFilterSelects();
+    renderFilteredGraphMap();
   } catch (error) {
     renderGraphMapStatus(`Graph map failed: ${error.message}`, "error");
     qs("#knowledge-graph-svg").innerHTML = "";
@@ -280,10 +338,56 @@ async function loadGraphMap() {
   }
 }
 
+function selectedGraphNodeTypes() {
+  return qsa(".graph-category-checkbox:checked").map((input) => input.value);
+}
+
+function handleGraphCategoryChange() {
+  updateGraphCategorySummary();
+  if (state.view !== "graph" || state.graphBusy) return;
+  if (state.graphMapRaw) {
+    renderGraphMapStatus("Graph categories changed. Click Load graph to refresh the map.", "muted");
+  } else {
+    renderGraphSetupPrompt();
+  }
+}
+
+function updateGraphCategorySummary() {
+  const selected = selectedGraphNodeTypes();
+  const summary = qs("#graph-category-summary");
+  if (!summary) return;
+  summary.textContent = selected.length
+    ? `${selected.length} selected: ${selected.map(graphTypeLabel).join(", ")}`
+    : "No category selected";
+}
+
+function renderGraphSetupPrompt(message = "Select graph categories, then click Load graph.", kind = "muted") {
+  if (state.graphAnimationFrame) {
+    cancelAnimationFrame(state.graphAnimationFrame);
+    state.graphAnimationFrame = null;
+  }
+  state.graphMap = null;
+  updateGraphCategorySummary();
+  renderGraphMapStatus(message, kind);
+  qs("#knowledge-graph-svg").innerHTML = "";
+  qs("#graph-legend").innerHTML = "";
+  renderGraphInspector(null);
+  applyGraphZoomTransform();
+}
+
 function graphMapSummary(payload) {
   const stats = payload.stats || {};
   const backendLabel = payload.backend === "neo4j" ? "Neo4j" : "Graph";
-  return `${formatNumber(stats.visible_nodes || 0)} visible nodes, ${formatNumber(stats.visible_edges || 0)} relations from ${formatNumber(stats.source_documents || 0)} theses | ${backendLabel}`;
+  const visibleCounts = stats.visible_node_counts || {};
+  const thesisCount = visibleCounts.Thesis || 0;
+  const categoryText = (stats.selected_node_types || []).length
+    ? ` | categories: ${stats.selected_node_types.map(graphTypeLabel).join(", ")}`
+    : "";
+  const filterText = stats.filters_active ? ` | ${formatNumber(stats.filters_active)} active filter${stats.filters_active === 1 ? "" : "s"}` : "";
+  const analysisText = stats.analysis_edges
+    ? ` | ${stats.analysis_edges_total > stats.analysis_edges ? `${formatNumber(stats.analysis_edges)} of ${formatNumber(stats.analysis_edges_total)}` : formatNumber(stats.analysis_edges)} analysis links`
+    : "";
+  return `${formatNumber(thesisCount)} theses in map, ${formatNumber(stats.visible_nodes || 0)} nodes, ${formatNumber(stats.visible_edges || 0)} relations from ${formatNumber(stats.source_documents || 0)} total theses | ${backendLabel}${categoryText}${filterText}${analysisText}`;
 }
 
 function renderGraphMapStatus(message, kind = "muted") {
@@ -294,8 +398,259 @@ function renderGraphMapStatus(message, kind = "muted") {
 
 function setGraphBusy(isBusy) {
   state.graphBusy = isBusy;
+  qs("#graph-load-button").disabled = isBusy;
   qs("#graph-reload-button").disabled = isBusy;
-  qs("#graph-thesis-limit").disabled = isBusy;
+  qsa(".graph-category-checkbox").forEach((input) => {
+    input.disabled = isBusy;
+  });
+  qsa("#graph-zoom-in, #graph-zoom-out, #graph-zoom-reset").forEach((button) => {
+    button.disabled = isBusy;
+  });
+  qsa(".graph-filter-panel select, .graph-filter-panel input, #graph-clear-filters-button").forEach((element) => {
+    element.disabled = isBusy;
+  });
+}
+
+function defaultGraphFilters() {
+  return {
+    relationType: "",
+    concept: "",
+    useCase: "",
+    year: "",
+    masterLevel: "",
+    track: "",
+    selectedOnly: false,
+    analysisLinks: false,
+    analysisPair: "Year:Concept",
+  };
+}
+
+function readGraphFiltersFromControls() {
+  return {
+    relationType: valueOf("#graph-relation-filter"),
+    concept: valueOf("#graph-concept-filter"),
+    useCase: valueOf("#graph-use-case-filter"),
+    year: valueOf("#graph-year-filter"),
+    masterLevel: valueOf("#graph-level-filter"),
+    track: valueOf("#graph-track-filter"),
+    selectedOnly: qs("#graph-selected-only").checked,
+    analysisLinks: qs("#graph-analysis-links").checked,
+    analysisPair: valueOf("#graph-analysis-pair") || "Year:Concept",
+  };
+}
+
+function applyGraphFilterControls() {
+  state.graphFilters = readGraphFiltersFromControls();
+  renderFilteredGraphMap();
+}
+
+function clearGraphFilters() {
+  state.graphFilters = defaultGraphFilters();
+  setValue("#graph-relation-filter", "");
+  setValue("#graph-concept-filter", "");
+  setValue("#graph-use-case-filter", "");
+  setValue("#graph-year-filter", "");
+  setValue("#graph-level-filter", "");
+  setValue("#graph-track-filter", "");
+  setValue("#graph-analysis-pair", "Year:Concept");
+  qs("#graph-selected-only").checked = false;
+  qs("#graph-analysis-links").checked = false;
+  renderFilteredGraphMap();
+}
+
+function renderFilteredGraphMap() {
+  if (!state.graphMapRaw) return;
+  const selectedBeforeRender = state.selectedGraphNodeId;
+  const filteredPayload = filterGraphMap(state.graphMapRaw, state.graphFilters, selectedBeforeRender);
+  const selectedStillDisplayed = selectedBeforeRender && filteredPayload.nodes.some((node) => node.id === selectedBeforeRender);
+  state.selectedGraphNodeId = selectedStillDisplayed ? selectedBeforeRender : null;
+  state.graphMap = filteredPayload;
+  renderKnowledgeGraph(filteredPayload);
+  renderGraphMapStatus(graphMapSummary(filteredPayload), "success");
+  if (state.selectedGraphNodeId) {
+    renderGraphSelection();
+    renderGraphInspector(state.selectedGraphNodeId);
+  }
+}
+
+function filterGraphMap(payload, filters, selectedNodeId) {
+  const rawNodes = payload.nodes || [];
+  const rawEdges = payload.edges || [];
+  const nodeById = new Map(rawNodes.map((node) => [node.id, node]));
+  const analysisTypes = filters.analysisLinks ? graphAnalysisPairTypes(filters.analysisPair) : null;
+  const thesisIds = new Set(
+    rawNodes
+      .filter((node) => node.type === "Thesis" && graphThesisMatchesFilters(node, rawEdges, nodeById, filters))
+      .map((node) => node.id),
+  );
+
+  let visibleEdges = rawEdges.filter((edge) => {
+    const source = nodeById.get(edge.source);
+    const target = nodeById.get(edge.target);
+    if (!source || !target) return false;
+    const thesisNode = source.type === "Thesis" ? source : target.type === "Thesis" ? target : null;
+    if (!thesisNode || !thesisIds.has(thesisNode.id)) return false;
+
+    const otherNode = source.type === "Thesis" ? target : source;
+    if (filters.relationType && otherNode.type !== filters.relationType) return false;
+    if (analysisTypes && !analysisTypes.has(otherNode.type)) return false;
+
+    const specificTargets = [
+      filters.concept ? { type: "Concept", label: filters.concept } : null,
+      filters.useCase ? { type: "UseCase", label: filters.useCase } : null,
+    ].filter(Boolean);
+    if (specificTargets.length && !filters.analysisLinks) {
+      return specificTargets.some((targetFilter) => otherNode.type === targetFilter.type && otherNode.label === targetFilter.label);
+    }
+
+    return true;
+  });
+
+  if (filters.selectedOnly && selectedNodeId && nodeById.has(selectedNodeId)) {
+    visibleEdges = visibleEdges.filter((edge) => edge.source === selectedNodeId || edge.target === selectedNodeId);
+  }
+
+  const nodeIds = new Set();
+  visibleEdges.forEach((edge) => {
+    nodeIds.add(edge.source);
+    nodeIds.add(edge.target);
+  });
+
+  const relationScoped = filters.relationType || filters.concept || filters.useCase || (filters.selectedOnly && selectedNodeId);
+  if (!relationScoped) {
+    thesisIds.forEach((nodeId) => nodeIds.add(nodeId));
+  }
+  if (filters.selectedOnly && selectedNodeId && nodeById.has(selectedNodeId)) {
+    nodeIds.add(selectedNodeId);
+  }
+
+  const nodes = rawNodes.filter((node) => nodeIds.has(node.id));
+  const baseEdges = visibleEdges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target));
+  const analysisResult = filters.analysisLinks ? graphAnalysisEdges(rawEdges, nodeById, thesisIds, nodeIds, filters.analysisPair) : { edges: [], total: 0 };
+  const analysisEdges = analysisResult.edges;
+  const edges = [...baseEdges, ...analysisEdges];
+  const visibleNodeCounts = nodes.reduce((counts, node) => {
+    counts[node.type] = (counts[node.type] || 0) + 1;
+    return counts;
+  }, {});
+
+  return {
+    ...payload,
+    nodes,
+    edges,
+    stats: {
+      ...(payload.stats || {}),
+      visible_nodes: nodes.length,
+      visible_edges: edges.length,
+      visible_node_counts: visibleNodeCounts,
+      filters_active: graphFilterCount(filters),
+      analysis_edges: analysisEdges.length,
+      analysis_edges_total: analysisResult.total,
+    },
+  };
+}
+
+function graphAnalysisEdges(rawEdges, nodeById, thesisIds, visibleNodeIds, analysisPair) {
+  const pairTypes = graphAnalysisPairTypes(analysisPair);
+  const byThesis = new Map();
+  rawEdges.forEach((edge) => {
+    const source = nodeById.get(edge.source);
+    const target = nodeById.get(edge.target);
+    if (!source || !target) return;
+    const thesisNode = source.type === "Thesis" ? source : target.type === "Thesis" ? target : null;
+    if (!thesisNode || !thesisIds.has(thesisNode.id)) return;
+    const metadataNode = source.type === "Thesis" ? target : source;
+    if (!visibleNodeIds.has(metadataNode.id) || !GRAPH_ANALYSIS_NODE_TYPES.has(metadataNode.type)) return;
+    if (!byThesis.has(thesisNode.id)) byThesis.set(thesisNode.id, []);
+    byThesis.get(thesisNode.id).push(metadataNode.id);
+  });
+
+  const pairCounts = new Map();
+  byThesis.forEach((metadataIds) => {
+    const uniqueIds = [...new Set(metadataIds)].sort(compareGraphAnalysisNodeIds(nodeById));
+    for (let left = 0; left < uniqueIds.length; left += 1) {
+      for (let right = left + 1; right < uniqueIds.length; right += 1) {
+        const sourceId = uniqueIds[left];
+        const targetId = uniqueIds[right];
+        if (pairTypes && !graphAnalysisPairMatches(nodeById.get(sourceId), nodeById.get(targetId), pairTypes)) continue;
+        const key = `${sourceId}||${targetId}`;
+        pairCounts.set(key, (pairCounts.get(key) || 0) + 1);
+      }
+    }
+  });
+
+  const edges = [...pairCounts.entries()].map(([key, weight]) => {
+    const [source, target] = key.split("||");
+    return {
+      id: `analysis:${source}->${target}`,
+      source,
+      target,
+      type: "ANALYSIS_LINK",
+      weight,
+    };
+  });
+  edges.sort((left, right) => {
+    if (right.weight !== left.weight) return right.weight - left.weight;
+    const leftSource = nodeById.get(left.source);
+    const rightSource = nodeById.get(right.source);
+    const sourceCompare = String(leftSource?.label || left.source).localeCompare(String(rightSource?.label || right.source), undefined, { numeric: true, sensitivity: "base" });
+    if (sourceCompare !== 0) return sourceCompare;
+    const leftTarget = nodeById.get(left.target);
+    const rightTarget = nodeById.get(right.target);
+    return String(leftTarget?.label || left.target).localeCompare(String(rightTarget?.label || right.target), undefined, { numeric: true, sensitivity: "base" });
+  });
+  return {
+    edges: edges.slice(0, GRAPH_ANALYSIS_LINK_LIMIT),
+    total: edges.length,
+  };
+}
+
+function graphAnalysisPairTypes(analysisPair) {
+  if (!analysisPair || analysisPair === "All") return null;
+  const [leftType, rightType] = String(analysisPair).split(":");
+  if (!leftType || !rightType) return null;
+  return new Set([leftType, rightType]);
+}
+
+function graphAnalysisPairMatches(leftNode, rightNode, pairTypes) {
+  return Boolean(leftNode && rightNode && pairTypes.has(leftNode.type) && pairTypes.has(rightNode.type) && leftNode.type !== rightNode.type);
+}
+
+function compareGraphAnalysisNodeIds(nodeById) {
+  return (leftId, rightId) => {
+    const left = nodeById.get(leftId);
+    const right = nodeById.get(rightId);
+    const leftOrder = GRAPH_ANALYSIS_NODE_ORDER[left?.type] ?? 99;
+    const rightOrder = GRAPH_ANALYSIS_NODE_ORDER[right?.type] ?? 99;
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    return String(left?.label || leftId).localeCompare(String(right?.label || rightId), undefined, { numeric: true, sensitivity: "base" });
+  };
+}
+
+function graphThesisMatchesFilters(node, edges, nodeById, filters) {
+  const metadata = node.metadata || {};
+  if (filters.year && String(metadata.year || "") !== filters.year) return false;
+  if (filters.masterLevel && String(metadata.master_level || "") !== filters.masterLevel) return false;
+  if (filters.track && String(metadata.track || "") !== filters.track) return false;
+  if (filters.concept && !graphThesisHasTarget(node.id, edges, nodeById, "Concept", filters.concept)) return false;
+  if (filters.useCase && !graphThesisHasTarget(node.id, edges, nodeById, "UseCase", filters.useCase)) return false;
+  return true;
+}
+
+function graphThesisHasTarget(thesisNodeId, edges, nodeById, targetType, targetLabel) {
+  return edges.some((edge) => {
+    if (edge.source !== thesisNodeId && edge.target !== thesisNodeId) return false;
+    const neighbourId = edge.source === thesisNodeId ? edge.target : edge.source;
+    const neighbour = nodeById.get(neighbourId);
+    return neighbour?.type === targetType && neighbour.label === targetLabel;
+  });
+}
+
+function graphFilterCount(filters) {
+  return Object.entries(filters).filter(([key, value]) => {
+    if (key === "analysisLinks" || key === "analysisPair") return false;
+    return key === "selectedOnly" ? value : Boolean(value);
+  }).length;
 }
 
 function renderKnowledgeGraph(payload) {
@@ -313,6 +668,7 @@ function renderKnowledgeGraph(payload) {
     vy: 0,
   }));
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const visibleThesisCount = nodes.filter((node) => node.type === "Thesis").length;
   const edges = (payload.edges || [])
     .map((edge) => ({
       ...edge,
@@ -328,32 +684,38 @@ function renderKnowledgeGraph(payload) {
 
   if (!nodes.length) {
     svg.innerHTML = "";
+    renderGraphLegend(payload);
     renderGraphInspector(null);
+    applyGraphZoomTransform();
     return;
   }
 
   placeGraphNodes(nodes, width, height);
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.innerHTML = `
-    <g class="graph-edge-layer">
-      ${edges.map((edge, index) => `
-        <line
-          class="graph-edge"
+    <g class="graph-viewport">
+      <g class="graph-edge-layer">
+        ${edges.map((edge, index) => `
+          <line
+          class="graph-edge ${edge.type === "ANALYSIS_LINK" ? "analysis-edge" : ""}"
           data-index="${index}"
           data-source="${escapeHtml(edge.source)}"
           data-target="${escapeHtml(edge.target)}"
-        ></line>
-      `).join("")}
-    </g>
-    <g class="graph-node-layer">
-      ${nodes.map((node) => `
-        <g class="graph-node type-${escapeHtml(node.type.toLowerCase())} ${graphNodeShouldShowLabel(node) ? "labelled" : ""}" data-node-id="${escapeHtml(node.id)}" tabindex="0" role="button" aria-label="${escapeHtml(`${graphTypeLabel(node.type)}: ${node.label}`)}">
-          <circle r="${node.radius}" fill="${escapeHtml(graphTypeColor(node.type))}"></circle>
-          <text class="graph-node-label" y="${node.radius + 13}">${escapeHtml(graphVisibleLabel(node))}</text>
-        </g>
-      `).join("")}
+          ></line>
+        `).join("")}
+      </g>
+      <g class="graph-node-layer">
+        ${nodes.map((node) => `
+          <g class="graph-node type-${escapeHtml(node.type.toLowerCase())} ${graphNodeShouldShowLabel(node, visibleThesisCount) ? "labelled" : ""}" data-node-id="${escapeHtml(node.id)}" tabindex="0" role="button" aria-label="${escapeHtml(`${graphTypeLabel(node.type)}: ${node.label}`)}">
+            <title>${escapeHtml(`${graphTypeLabel(node.type)}: ${node.label}`)}</title>
+            <circle r="${node.radius}" fill="${escapeHtml(graphTypeColor(node.type))}"></circle>
+            <text class="graph-node-label" y="${node.radius + 13}">${escapeHtml(graphVisibleLabel(node))}</text>
+          </g>
+        `).join("")}
+      </g>
     </g>
   `;
+  applyGraphZoomTransform();
 
   svg.querySelectorAll(".graph-node").forEach((element) => {
     const node = nodeById.get(element.dataset.nodeId);
@@ -509,7 +871,7 @@ function bindGraphDrag(svg, element, node, nodes, edges) {
   });
   element.addEventListener("pointermove", (event) => {
     if (!dragging) return;
-    const point = svgPoint(svg, event.clientX, event.clientY);
+    const point = graphPoint(svg, event.clientX, event.clientY);
     node.x = point.x;
     node.y = point.y;
     node.vx = 0;
@@ -523,6 +885,107 @@ function bindGraphDrag(svg, element, node, nodes, edges) {
   element.addEventListener("pointercancel", () => {
     dragging = false;
   });
+}
+
+function bindGraphViewportInteractions(svg) {
+  svg.addEventListener("wheel", (event) => {
+    if (!state.graphMap) return;
+    event.preventDefault();
+    const anchor = svgPoint(svg, event.clientX, event.clientY);
+    const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+    setGraphZoom(state.graphZoom.scale * factor, anchor);
+  }, { passive: false });
+
+  let panning = false;
+  let previousPoint = null;
+
+  svg.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest(".graph-node")) return;
+    panning = true;
+    previousPoint = svgPoint(svg, event.clientX, event.clientY);
+    svg.classList.add("graph-panning");
+    svg.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+
+  svg.addEventListener("pointermove", (event) => {
+    if (!panning || !previousPoint) return;
+    const currentPoint = svgPoint(svg, event.clientX, event.clientY);
+    state.graphZoom = {
+      ...state.graphZoom,
+      x: state.graphZoom.x + currentPoint.x - previousPoint.x,
+      y: state.graphZoom.y + currentPoint.y - previousPoint.y,
+    };
+    previousPoint = currentPoint;
+    applyGraphZoomTransform();
+  });
+
+  function stopPanning(event) {
+    if (!panning) return;
+    panning = false;
+    previousPoint = null;
+    svg.classList.remove("graph-panning");
+    if (event.pointerId !== undefined && svg.hasPointerCapture(event.pointerId)) {
+      svg.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  svg.addEventListener("pointerup", stopPanning);
+  svg.addEventListener("pointercancel", stopPanning);
+  svg.addEventListener("pointerleave", stopPanning);
+}
+
+function zoomGraphBy(factor) {
+  const svg = qs("#knowledge-graph-svg");
+  const rect = svg.getBoundingClientRect();
+  const anchor = svgPoint(svg, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  setGraphZoom(state.graphZoom.scale * factor, anchor);
+}
+
+function resetGraphZoom() {
+  state.graphZoom = { scale: 1, x: 0, y: 0 };
+  applyGraphZoomTransform();
+}
+
+function setGraphZoom(nextScale, anchor) {
+  const current = state.graphZoom;
+  const scale = clamp(nextScale, GRAPH_ZOOM_MIN, GRAPH_ZOOM_MAX);
+  if (!anchor) {
+    state.graphZoom = { ...current, scale };
+    applyGraphZoomTransform();
+    return;
+  }
+  const graphAnchor = {
+    x: (anchor.x - current.x) / current.scale,
+    y: (anchor.y - current.y) / current.scale,
+  };
+  state.graphZoom = {
+    scale,
+    x: anchor.x - graphAnchor.x * scale,
+    y: anchor.y - graphAnchor.y * scale,
+  };
+  applyGraphZoomTransform();
+}
+
+function applyGraphZoomTransform() {
+  const zoom = state.graphZoom;
+  const viewport = qs("#knowledge-graph-svg .graph-viewport");
+  if (viewport) {
+    viewport.setAttribute("transform", `translate(${zoom.x.toFixed(2)} ${zoom.y.toFixed(2)}) scale(${zoom.scale.toFixed(3)})`);
+  }
+  const label = qs("#graph-zoom-label");
+  if (label) {
+    label.textContent = `${Math.round(zoom.scale * 100)}%`;
+  }
+}
+
+function graphPoint(svg, clientX, clientY) {
+  const point = svgPoint(svg, clientX, clientY);
+  const zoom = state.graphZoom;
+  return {
+    x: (point.x - zoom.x) / zoom.scale,
+    y: (point.y - zoom.y) / zoom.scale,
+  };
 }
 
 function svgPoint(svg, clientX, clientY) {
@@ -547,6 +1010,10 @@ function renderGraphLegend(payload) {
 
 function selectGraphNode(nodeId) {
   state.selectedGraphNodeId = nodeId;
+  if (state.graphFilters.selectedOnly) {
+    renderFilteredGraphMap();
+    return;
+  }
   renderGraphSelection();
   renderGraphInspector(nodeId);
 }
@@ -605,7 +1072,7 @@ function renderGraphInspector(nodeId) {
         ${neighbours.map(({ edge, node: neighbour }) => `
           <button class="mini-row graph-neighbour" type="button" data-node-id="${escapeHtml(neighbour.id)}">
             <strong>${escapeHtml(graphTypeLabel(neighbour.type))} | ${escapeHtml(truncate(neighbour.label, 76))}</strong>
-            <span>${escapeHtml(formatGraphEdgeType(edge.type))}</span>
+            <span>${escapeHtml(formatGraphEdgeSummary(edge))}</span>
           </button>
         `).join("") || '<div class="muted">No visible direct connection.</div>'}
       </div>
@@ -635,13 +1102,13 @@ function graphNodeRadius(node) {
 }
 
 function graphVisibleLabel(node) {
-  if (node.type === "Thesis") return node.metadata?.thesis_id || truncate(node.label, 24);
-  return truncate(node.label, node.type === "Thesis" ? 24 : 28);
+  if (node.type === "Thesis") return truncate(node.label, 42);
+  return truncate(node.label, 28);
 }
 
-function graphNodeShouldShowLabel(node) {
+function graphNodeShouldShowLabel(node, visibleThesisCount = Infinity) {
   const incoming = Number(node.incoming_edges || node.weight || 1);
-  if (node.type === "Thesis") return false;
+  if (node.type === "Thesis") return visibleThesisCount <= GRAPH_TITLE_LABEL_THRESHOLD;
   if (node.type === "Keyword") return false;
   if (node.type === "Concept") return incoming >= 12;
   return true;
@@ -657,6 +1124,14 @@ function graphTypeLabel(type) {
 
 function formatGraphEdgeType(type) {
   return String(type || "").toLowerCase().replaceAll("_", " ");
+}
+
+function formatGraphEdgeSummary(edge) {
+  if (edge.type === "ANALYSIS_LINK") {
+    const count = Number(edge.weight || 0);
+    return `shared by ${formatNumber(count)} ${count === 1 ? "thesis" : "theses"}`;
+  }
+  return formatGraphEdgeType(edge.type);
 }
 
 function clamp(value, min, max) {
@@ -676,12 +1151,44 @@ async function loadFacets() {
   fillSelect(qs("#year-filter"), state.facets.years || [], "All years");
   fillSelect(qs("#level-filter"), state.facets.master_levels || [], "All levels");
   fillSelect(qs("#track-filter"), state.facets.tracks || [], "All tracks");
+  fillGraphFilterSelects();
 }
 
-function fillSelect(select, items, defaultLabel) {
+function fillGraphFilterSelects() {
+  if (!state.facets) return;
+  fillSelect(qs("#graph-concept-filter"), graphFilterItems("Concept", state.facets.concepts || []), "All concepts", state.graphFilters.concept);
+  fillSelect(qs("#graph-use-case-filter"), graphFilterItems("UseCase", state.facets.use_cases || []), "All use cases", state.graphFilters.useCase);
+  fillSelect(qs("#graph-year-filter"), graphFilterItems("Year", state.facets.years || []), "All years", state.graphFilters.year);
+  fillSelect(qs("#graph-level-filter"), graphFilterItems("MasterLevel", state.facets.master_levels || []), "All levels", state.graphFilters.masterLevel);
+  fillSelect(qs("#graph-track-filter"), graphFilterItems("Track", state.facets.tracks || []), "All tracks", state.graphFilters.track);
+  state.graphFilters = {
+    ...state.graphFilters,
+    concept: valueOf("#graph-concept-filter"),
+    useCase: valueOf("#graph-use-case-filter"),
+    year: valueOf("#graph-year-filter"),
+    masterLevel: valueOf("#graph-level-filter"),
+    track: valueOf("#graph-track-filter"),
+  };
+}
+
+function graphFilterItems(nodeType, fallbackItems) {
+  const graphNodes = state.graphMapRaw?.nodes || [];
+  if (!graphNodes.length) return fallbackItems;
+  const labels = [...new Set(graphNodes.filter((node) => node.type === nodeType).map((node) => node.label).filter(Boolean))];
+  labels.sort((left, right) => String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" }));
+  return labels.map((label) => ({ label }));
+}
+
+function fillSelect(select, items, defaultLabel, selectedValue = "") {
   select.innerHTML = `<option value="">${escapeHtml(defaultLabel)}</option>${items
-    .map((item) => `<option value="${escapeHtml(item.label)}">${escapeHtml(item.label)}</option>`)
+    .map((item) => {
+      const label = typeof item === "object" && item !== null ? item.label : item;
+      return `<option value="${escapeHtml(label)}">${escapeHtml(label)}</option>`;
+    })
     .join("")}`;
+  if (selectedValue && [...select.options].some((option) => option.value === selectedValue)) {
+    select.value = selectedValue;
+  }
 }
 
 function renderRankList(container, items) {
