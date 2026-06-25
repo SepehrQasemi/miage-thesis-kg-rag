@@ -12,13 +12,9 @@ The filesystem stores PDFs and generated artifacts:
 
 ## Windows Setup
 
-Start Neo4j:
+Make sure Docker Desktop is installed and running.
 
-```powershell
-docker compose up -d neo4j
-```
-
-Install and initialize:
+Install and initialize. This command creates the Python virtual environment, installs dependencies, starts Neo4j with Docker Compose, creates `.env` when missing, and checks the installation:
 
 ```bat
 setup_windows.cmd
@@ -44,7 +40,7 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 docker compose up -d neo4j
-python scripts/setup_project.py --install-playwright
+python scripts/setup_project.py
 python scripts/doctor.py
 python scripts/run_web_app.py --port 8000
 ```

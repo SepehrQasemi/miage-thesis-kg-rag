@@ -56,13 +56,9 @@ flowchart LR
 
 ### Quick Start On Windows
 
-1. Start Neo4j:
+1. Make sure Docker Desktop is installed and running.
 
-```powershell
-docker compose up -d neo4j
-```
-
-2. Install and initialize the project:
+2. Install and initialize the project. This command creates the Python virtual environment, installs dependencies, starts Neo4j with Docker Compose, creates `.env` when missing, and checks the installation:
 
 ```bat
 setup_windows.cmd
@@ -96,7 +92,7 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 docker compose up -d neo4j
-python scripts/setup_project.py --install-playwright
+python scripts/setup_project.py
 python scripts/doctor.py
 python scripts/run_web_app.py --port 8000
 ```
@@ -180,6 +176,12 @@ python scripts/build_embeddings.py
 python -m pytest -q
 ```
 
+Playwright Chromium is only required for browser UI tests:
+
+```powershell
+python -m playwright install chromium
+```
+
 ### Optional Local LLM
 
 The application works without Ollama. If Ollama is installed, it can help review weak extraction drafts.
@@ -255,9 +257,9 @@ Neo4j est la source de verite de l'application.
 
 ### Demarrage Rapide Sous Windows
 
-```powershell
-docker compose up -d neo4j
-```
+1. Verifier que Docker Desktop est installe et demarre.
+
+2. Installer et initialiser le projet. Cette commande cree l'environnement Python, installe les dependances, demarre Neo4j avec Docker Compose, cree `.env` si necessaire et verifie l'installation:
 
 ```bat
 setup_windows.cmd
@@ -284,7 +286,7 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 docker compose up -d neo4j
-python scripts/setup_project.py --install-playwright
+python scripts/setup_project.py
 python scripts/doctor.py
 python scripts/run_web_app.py --port 8000
 ```

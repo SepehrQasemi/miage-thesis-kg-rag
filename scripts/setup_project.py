@@ -2,6 +2,7 @@ import argparse
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -55,13 +56,21 @@ def ensure_env_file() -> None:
 
 def initialize_neo4j(reset: bool) -> None:
     service = Neo4jGraphQueryService()
-    try:
-        service.verify_connectivity()
-    except Exception as exc:
+    last_error: Exception | None = None
+    for attempt in range(1, 31):
+        try:
+            service.verify_connectivity()
+            break
+        except Exception as exc:
+            last_error = exc
+            if attempt == 1:
+                print("Waiting for Neo4j to become ready...")
+            time.sleep(2)
+    else:
         raise SystemExit(
             "Neo4j is required. Start it with `docker compose up -d neo4j`, "
-            f"then rerun setup. Details: {exc}"
-        ) from exc
+            f"then rerun setup. Details: {last_error}"
+        ) from last_error
     service.ensure_schema()
     if reset:
         service.replace_with_documents([])
