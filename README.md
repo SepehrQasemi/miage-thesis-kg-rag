@@ -120,7 +120,7 @@ MIAGE_MAX_UPLOAD_MB=100
 ### Web App Features
 
 - `Dashboard`: dataset and graph overview.
-- `Knowledge Graph`: interactive graph map that first asks which metadata categories to load, then maps all theses with the selected concepts, keywords, use cases, methods, years, levels, or tracks. It also includes filters, zoom, and derived analysis links for readable exploration.
+- `Knowledge Graph`: interactive graph map that first asks which categories to load, including thesis nodes when needed. It supports a thesis-centered map and metadata-centered maps, for example Concept -> Year or Concept -> Keyword, with an optional `Thesis` category to show the evidence nodes behind direct analytical relations. It also includes filters, zoom, and readable relationship weights.
 - `Thesis Search`: text search, filters, pagination, and thesis profiles.
 - `Concepts`: concept index and connected theses.
 - `Dataset`: full dataset table with CSV copy/download.
@@ -144,10 +144,11 @@ MIAGE_MAX_UPLOAD_MB=100
 ### Knowledge Graph Workflow
 
 1. Open `Knowledge Graph`.
-2. Select the metadata categories to analyze before loading the map.
-3. Click `Load graph`.
-4. The map uses all theses from Neo4j, but only draws the selected metadata categories.
-5. Use filters, zoom, selection focus, and analysis links to inspect dense graph areas without loading every relationship family at once.
+2. Choose the central node type. Use `Thesis` for the normal thesis-centered graph, or use a metadata type such as `Concept` to see direct derived relations from concepts to years, keywords, methods, use cases, levels, or tracks.
+3. Select the categories to analyze before loading the map. Tick `Thesis` when thesis nodes should be visible.
+4. Click `Load graph`.
+5. The map uses all theses from Neo4j as evidence, but only draws the selected visual mode. In metadata-centered mode, direct links are weighted by the number of theses connecting both metadata nodes; thesis nodes are drawn only when `Thesis` is selected.
+6. Use filters, zoom, and selection focus to inspect dense graph areas without loading every relationship family at once.
 
 ### RAG Behavior
 
@@ -294,7 +295,7 @@ python scripts/run_web_app.py --port 8000
 ### Fonctionnalites
 
 - `Dashboard`: vue globale du dataset et du graphe.
-- `Knowledge Graph`: carte interactive qui demande d'abord les categories de metadonnees a charger, puis affiche tous les memoires avec les concepts, mots-cles, cas d'usage, methodes, annees, niveaux ou parcours selectionnes. Elle inclut aussi les filtres, le zoom et les liens d'analyse derives.
+- `Knowledge Graph`: carte interactive qui demande d'abord les categories a charger, y compris les memoires si necessaire. Elle supporte une vue centree sur les memoires et des vues centrees sur les metadonnees, par exemple Concept -> Annee ou Concept -> Mot-cle, avec une categorie `Thesis` optionnelle pour afficher les noeuds de preuve.
 - `Thesis Search`: recherche, filtres, pagination et fiche memoire.
 - `Concepts`: index des concepts et memoires connectes.
 - `Dataset`: table complete et export CSV.
@@ -316,10 +317,11 @@ python scripts/run_web_app.py --port 8000
 ### Cycle D'exploration Du Graphe
 
 1. Ouvrir `Knowledge Graph`.
-2. Selectionner les categories de metadonnees a analyser avant de charger la carte.
-3. Cliquer sur `Load graph`.
-4. La carte utilise tous les memoires stockes dans Neo4j, mais dessine uniquement les categories selectionnees.
-5. Utiliser les filtres, le zoom, le focus de selection et les liens d'analyse pour explorer les zones denses sans charger toutes les familles de relations en meme temps.
+2. Choisir le type de noeud central. Utiliser `Thesis` pour la vue centree memoire, ou un type de metadonnee comme `Concept` pour visualiser des relations directes vers les annees, mots-cles, methodes, cas d'usage, niveaux ou parcours.
+3. Selectionner les categories a analyser avant de charger la carte. Cocher `Thesis` quand les noeuds memoire doivent etre visibles.
+4. Cliquer sur `Load graph`.
+5. La carte utilise tous les memoires stockes dans Neo4j comme preuve, mais ne dessine que le mode visuel choisi. En mode centre metadonnee, les liens directs sont ponderes par le nombre de memoires qui connectent les deux noeuds; les noeuds memoire ne sont affiches que si `Thesis` est selectionne.
+6. Utiliser les filtres, le zoom et le focus de selection pour explorer les zones denses sans charger toutes les familles de relations en meme temps.
 
 ### Commandes Utiles
 

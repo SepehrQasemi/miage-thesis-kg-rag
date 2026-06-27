@@ -93,7 +93,9 @@ GRAPH_MAP_EDGE_TYPES = {
     "HAS_MASTER_LEVEL",
     "HAS_TRACK",
 }
-GRAPH_MAP_SELECTABLE_NODE_TYPES = frozenset(GRAPH_MAP_ENTITY_LIMITS)
+GRAPH_MAP_METADATA_NODE_TYPES = frozenset(GRAPH_MAP_ENTITY_LIMITS)
+GRAPH_MAP_SELECTABLE_NODE_TYPES = frozenset({"Thesis", *GRAPH_MAP_METADATA_NODE_TYPES})
+GRAPH_MAP_FOCUS_NODE_TYPES = frozenset({"Thesis", *GRAPH_MAP_METADATA_NODE_TYPES})
 
 
 def graph_backend() -> str:
@@ -128,6 +130,7 @@ def graph_map_payload(
     thesis_limit: int = 60,
     concept_limit: int = 24,
     selected_node_types: set[str] | None = None,
+    focus_type: str = "Thesis",
 ) -> dict[str, Any]:
     graph = build_knowledge_graph(rows, related_min_shared_concepts=0)
     incoming_counts: Counter[str] = Counter()
@@ -139,6 +142,17 @@ def graph_map_payload(
         incoming_counts[edge.target_id] += 1
         if edge.source_id.startswith("thesis:"):
             thesis_targets[edge.source_id].append(edge.target_id)
+
+    if focus_type != "Thesis":
+        return graph_map_metadata_focus_payload(
+            graph=graph,
+            rows=rows,
+            backend=backend,
+            incoming_counts=incoming_counts,
+            thesis_targets=thesis_targets,
+            selected_node_types=(selected_node_types or set()) | {focus_type},
+            focus_type=focus_type,
+        )
 
     selected_entities: set[str] = set()
     if selected_node_types is not None:
@@ -219,6 +233,123 @@ def graph_map_payload(
             "concept_limit": None if selected_node_types is not None else concept_limit,
             "selected_node_types": sorted(selected_node_types) if selected_node_types is not None else [],
             "thesis_scope": thesis_scope,
+            "focus_type": "Thesis",
+            "graph_mode": "thesis_centered",
+        },
+    }
+
+
+def graph_map_metadata_focus_payload(
+    *,
+    graph: Any,
+    rows: list[dict[str, Any]],
+    backend: str,
+    incoming_counts: Counter[str],
+    thesis_targets: dict[str, list[str]],
+    selected_node_types: set[str],
+    focus_type: str,
+) -> dict[str, Any]:
+    selected_node_types = set(selected_node_types) & GRAPH_MAP_SELECTABLE_NODE_TYPES
+    selected_node_types.add(focus_type)
+    include_thesis = "Thesis" in selected_node_types
+    selected_metadata_node_types = (selected_node_types & GRAPH_MAP_METADATA_NODE_TYPES) | {focus_type}
+
+    selected_entities: set[str] = set()
+    entity_limits = {**GRAPH_MAP_ENTITY_LIMITS, "Concept": max(GRAPH_MAP_ENTITY_LIMITS["Concept"], 60)}
+    for node_type in selected_metadata_node_types:
+        candidates = [
+            node
+            for node in graph.nodes.values()
+            if node.node_type == node_type and incoming_counts[node.node_id] > 0
+        ]
+        candidates.sort(key=lambda node: (-incoming_counts[node.node_id], node.label.lower()))
+        selected_entities.update(node.node_id for node in candidates[: entity_limits.get(node_type, 24)])
+
+    node_type_by_id = {node_id: graph.nodes[node_id].node_type for node_id in selected_entities if node_id in graph.nodes}
+    direct_edge_counts: Counter[tuple[str, str]] = Counter()
+    selected_thesis_ids: set[str] = set()
+
+    for thesis_id, target_ids in thesis_targets.items():
+        metadata_ids = sorted({target_id for target_id in target_ids if target_id in selected_entities})
+        focus_ids = [node_id for node_id in metadata_ids if node_type_by_id.get(node_id) == focus_type]
+        if not focus_ids:
+            continue
+        if include_thesis:
+            selected_thesis_ids.add(thesis_id)
+        for focus_id in focus_ids:
+            for target_id in metadata_ids:
+                if target_id == focus_id or node_type_by_id.get(target_id) == focus_type:
+                    continue
+                direct_edge_counts[(focus_id, target_id)] += 1
+
+    visible_edges = [
+        {
+            "id": f"direct:{source}->{target}",
+            "source": source,
+            "target": target,
+            "type": "DIRECT_RELATION",
+            "weight": weight,
+        }
+        for (source, target), weight in direct_edge_counts.items()
+    ]
+    thesis_edges = [
+        {
+            "id": edge.edge_id,
+            "source": edge.source_id,
+            "target": edge.target_id,
+            "type": edge.edge_type,
+            "weight": edge.weight,
+        }
+        for edge in graph.sorted_edges()
+        if include_thesis
+        and edge.edge_type in GRAPH_MAP_EDGE_TYPES
+        and edge.source_id in selected_thesis_ids
+        and edge.target_id in selected_entities
+    ]
+    visible_edges.extend(thesis_edges)
+    visible_edges.sort(key=lambda edge: (-edge["weight"], graph.nodes[edge["source"]].label.lower(), graph.nodes[edge["target"]].label.lower()))
+
+    visible_degree: Counter[str] = Counter()
+    for edge in visible_edges:
+        visible_degree[edge["source"]] += edge["weight"]
+        visible_degree[edge["target"]] += edge["weight"]
+
+    visible_node_ids = {edge["source"] for edge in visible_edges} | {edge["target"] for edge in visible_edges}
+    visible_node_ids.update(selected_thesis_ids)
+    visible_nodes = [graph.nodes[node_id] for node_id in visible_node_ids if node_id in graph.nodes]
+    visible_nodes.sort(
+        key=lambda node: (
+            0 if node.node_type == focus_type else GRAPH_MAP_NODE_ORDER.get(node.node_type, 99),
+            -visible_degree[node.node_id],
+            node.label.lower(),
+        )
+    )
+
+    node_type_counts: Counter[str] = Counter(node.node_type for node in graph.nodes.values())
+    edge_type_counts: Counter[str] = Counter(edge.edge_type for edge in graph.edges.values())
+    visible_type_counts: Counter[str] = Counter(node.node_type for node in visible_nodes)
+
+    return {
+        "backend": backend,
+        "nodes": [graph_map_node(node, incoming_counts, visible_degree) for node in visible_nodes],
+        "edges": visible_edges,
+        "stats": {
+            "source_documents": len(rows),
+            "total_nodes": len(graph.nodes),
+            "total_edges": len(graph.edges),
+            "visible_nodes": len(visible_nodes),
+            "visible_edges": len(visible_edges),
+            "visible_node_counts": dict(sorted(visible_type_counts.items())),
+            "node_counts": dict(sorted(node_type_counts.items())),
+            "edge_counts": dict(sorted(edge_type_counts.items())),
+            "thesis_limit": None,
+            "concept_limit": None,
+            "selected_node_types": sorted(selected_node_types),
+            "thesis_scope": "included" if include_thesis else "hidden",
+            "focus_type": focus_type,
+            "graph_mode": "metadata_focus",
+            "direct_relation_edges": len(visible_edges) - len(thesis_edges),
+            "thesis_relation_edges": len(thesis_edges),
         },
     }
 
@@ -235,6 +366,14 @@ def parse_graph_node_types(value: str | None) -> set[str] | None:
         invalid_values = ", ".join(sorted(invalid))
         raise HTTPException(status_code=400, detail=f"Unsupported graph category: {invalid_values}. Valid values: {valid_values}.")
     return node_types
+
+
+def parse_graph_focus_type(value: str | None) -> str:
+    focus_type = str(value or "Thesis").strip() or "Thesis"
+    if focus_type not in GRAPH_MAP_FOCUS_NODE_TYPES:
+        valid_values = ", ".join(sorted(GRAPH_MAP_FOCUS_NODE_TYPES))
+        raise HTTPException(status_code=400, detail=f"Unsupported graph focus: {focus_type}. Valid values: {valid_values}.")
+    return focus_type
 
 
 def select_graph_map_theses(
@@ -296,7 +435,7 @@ def graph_map_node(node: Any, incoming_counts: Counter[str], visible_degree: Cou
         "id": node.node_id,
         "type": node.node_type,
         "label": node.label,
-        "subtitle": f"{incoming_counts[node.node_id]} connected thesis{'es' if incoming_counts[node.node_id] != 1 else ''}",
+        "subtitle": f"{incoming_counts[node.node_id]} connected {'thesis' if incoming_counts[node.node_id] == 1 else 'theses'}",
         "weight": max(1, incoming_counts[node.node_id]),
         "incoming_edges": incoming_counts[node.node_id],
         "metadata": {},
@@ -354,7 +493,8 @@ def dataset_csv() -> FileResponse:
 def graph_map(
     thesis_limit: Annotated[int, Query(ge=10, le=1000)] = 60,
     concept_limit: Annotated[int, Query(ge=5, le=50)] = 24,
-    node_types: Annotated[str | None, Query(description="Comma-separated metadata node types to include with all thesis nodes.")] = None,
+    node_types: Annotated[str | None, Query(description="Comma-separated graph node types to display, including Thesis and metadata categories.")] = None,
+    focus_type: Annotated[str | None, Query(description="Central graph node type. Use Thesis for the normal map or a metadata type for direct metadata relations.")] = None,
 ) -> dict[str, Any]:
     rows = service().document_rows()
     return graph_map_payload(
@@ -363,6 +503,7 @@ def graph_map(
         thesis_limit=thesis_limit,
         concept_limit=concept_limit,
         selected_node_types=parse_graph_node_types(node_types),
+        focus_type=parse_graph_focus_type(focus_type),
     )
 
 

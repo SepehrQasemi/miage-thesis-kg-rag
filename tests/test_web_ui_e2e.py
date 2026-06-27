@@ -185,9 +185,10 @@ def test_help_page_documents_main_workflows(page):
 def open_and_load_knowledge_graph(page, categories=("Concept", "Year")):
     page.get_by_role("button", name="Knowledge Graph").click()
     expect(page.locator("#graph-map-status")).to_contain_text("Select graph categories")
-    for category in ["Concept", "Year", "UseCase", "Methodology", "MasterLevel", "Track", "Keyword"]:
+    focus_type = page.locator("#graph-focus-type").input_value()
+    for category in ["Thesis", "Concept", "Year", "UseCase", "Methodology", "MasterLevel", "Track", "Keyword"]:
         checkbox = page.locator(f'.graph-category-checkbox[value="{category}"]')
-        if category in categories:
+        if category == focus_type or category in categories:
             checkbox.check()
         else:
             checkbox.uncheck()
@@ -199,6 +200,7 @@ def test_knowledge_graph_map_renders_nodes_legend_and_inspector(page):
     page.get_by_role("button", name="Knowledge Graph").click()
 
     expect(page.locator("#graph-map-status")).to_contain_text("Select graph categories")
+    expect(page.locator('.graph-category-checkbox[value="Thesis"]')).to_be_checked()
     expect(page.locator("#knowledge-graph-svg .graph-node")).to_have_count(0)
     page.locator("#graph-load-button").click()
 
@@ -279,6 +281,45 @@ def test_knowledge_graph_analysis_links_connect_metadata(page):
         """
     )
     assert has_year_concept_link
+
+
+def test_knowledge_graph_can_use_concept_as_central_node(page):
+    page.get_by_role("button", name="Knowledge Graph").click()
+    page.locator("#graph-focus-type").select_option("Concept")
+    for category in ["Thesis", "Concept", "Year", "UseCase", "Methodology", "MasterLevel", "Track", "Keyword"]:
+        checkbox = page.locator(f'.graph-category-checkbox[value="{category}"]')
+        if category in {"Concept", "Year", "Keyword"}:
+            checkbox.check()
+        else:
+            checkbox.uncheck()
+
+    page.locator("#graph-load-button").click()
+
+    expect(page.locator("#graph-map-status")).to_contain_text("Concept-centered map", timeout=15000)
+    expect(page.locator("#knowledge-graph-svg .graph-node").first).to_be_visible(timeout=15000)
+    expect(page.locator("#knowledge-graph-svg .type-thesis")).to_have_count(0)
+    assert page.locator("#knowledge-graph-svg .direct-edge").count() >= 1
+    expect(page.locator("#graph-legend")).to_contain_text("Concept")
+    expect(page.locator("#graph-legend")).to_contain_text("Year")
+
+
+def test_knowledge_graph_can_show_theses_with_metadata_center(page):
+    page.get_by_role("button", name="Knowledge Graph").click()
+    page.locator("#graph-focus-type").select_option("Concept")
+    for category in ["Thesis", "Concept", "Year", "UseCase", "Methodology", "MasterLevel", "Track", "Keyword"]:
+        checkbox = page.locator(f'.graph-category-checkbox[value="{category}"]')
+        if category in {"Thesis", "Concept", "Year"}:
+            checkbox.check()
+        else:
+            checkbox.uncheck()
+
+    page.locator("#graph-load-button").click()
+
+    expect(page.locator("#graph-map-status")).to_contain_text("Concept-centered map", timeout=15000)
+    expect(page.locator("#graph-map-status")).to_contain_text("thesis links")
+    expect(page.locator("#knowledge-graph-svg .type-thesis").first).to_be_visible(timeout=15000)
+    expect(page.locator("#graph-legend")).to_contain_text("Thesis")
+    expect(page.locator("#graph-relation-filter")).to_contain_text("Theses")
 
 
 def test_search_filter_and_detail_panel(page):

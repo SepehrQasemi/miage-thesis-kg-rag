@@ -260,7 +260,7 @@ textarea {
 
 .graph-category-panel {
   display: grid;
-  grid-template-columns: minmax(180px, 0.55fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(170px, 0.45fr) minmax(150px, 190px) minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
   padding: 14px;
@@ -279,6 +279,10 @@ textarea {
 .graph-category-copy h4 {
   margin: 0;
   font-size: 15px;
+}
+
+.graph-focus-select {
+  min-width: 0;
 }
 
 .graph-category-options {
@@ -455,13 +459,29 @@ textarea {
   stroke-opacity: 0.5;
 }
 
+.graph-edge.direct-edge {
+  stroke: #172b3d;
+  stroke-width: 1.7;
+  stroke-opacity: 0.58;
+}
+
 .graph-edge.analysis-edge.selected {
   stroke: #b84c2f;
   stroke-width: 2.7;
   stroke-opacity: 0.9;
 }
 
+.graph-edge.direct-edge.selected {
+  stroke: #102131;
+  stroke-width: 3;
+  stroke-opacity: 0.92;
+}
+
 .graph-edge.analysis-edge.dimmed {
+  stroke-opacity: 0.12;
+}
+
+.graph-edge.direct-edge.dimmed {
   stroke-opacity: 0.12;
 }
 

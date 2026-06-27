@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MIAGE Thesis Knowledge Graph</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260624-graph-categories" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260627-thesis-category" />
   </head>
   <body>
     <div class="app-shell">
@@ -107,7 +107,24 @@
                 <h4>Choose categories to load</h4>
                 <span id="graph-category-summary" class="muted">2 selected: Concept, Year</span>
               </div>
+              <div class="select-wrap graph-focus-select">
+                <label for="graph-focus-type">Central node</label>
+                <select id="graph-focus-type">
+                  <option value="Thesis">Thesis</option>
+                  <option value="Concept">Concept</option>
+                  <option value="Year">Year</option>
+                  <option value="Keyword">Keyword</option>
+                  <option value="UseCase">Use case</option>
+                  <option value="Methodology">Methodology</option>
+                  <option value="MasterLevel">Level</option>
+                  <option value="Track">Track</option>
+                </select>
+              </div>
               <div class="graph-category-options">
+                <label class="graph-category-option" for="graph-category-thesis">
+                  <input class="graph-category-checkbox" id="graph-category-thesis" type="checkbox" value="Thesis" checked />
+                  Theses
+                </label>
                 <label class="graph-category-option" for="graph-category-concept">
                   <input class="graph-category-checkbox" id="graph-category-concept" type="checkbox" value="Concept" checked />
                   Concepts
@@ -145,6 +162,7 @@
                 <label for="graph-relation-filter">Relations shown</label>
                 <select id="graph-relation-filter">
                   <option value="">All relation types</option>
+                  <option value="Thesis">Theses</option>
                   <option value="Concept">Concepts</option>
                   <option value="UseCase">Use cases</option>
                   <option value="Methodology">Methodologies</option>
@@ -541,6 +559,6 @@
       </div>
     </div>
 
-    <script src="/static/app.js?v=20260624-graph-categories" type="module"></script>
+    <script src="/static/app.js?v=20260627-thesis-category" type="module"></script>
   </body>
 </html>

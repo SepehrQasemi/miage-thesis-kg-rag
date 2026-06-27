@@ -189,6 +189,44 @@ def test_graph_map_endpoint_scopes_all_theses_by_selected_categories(tmp_path, m
     assert all(edge["type"] in {"HAS_CONCEPT", "SUBMITTED_IN"} for edge in data["edges"])
 
 
+def test_graph_map_endpoint_can_center_on_concepts_without_thesis_nodes(tmp_path, monkeypatch):
+    client, graph_service = client_for(tmp_path, monkeypatch)
+
+    response = client.get("/api/graph/map", params={"node_types": "Concept,Year,Keyword", "focus_type": "Concept"})
+
+    assert response.status_code == 200
+    data = response.json()
+    node_types = {node["type"] for node in data["nodes"]}
+    assert data["stats"]["graph_mode"] == "metadata_focus"
+    assert data["stats"]["focus_type"] == "Concept"
+    assert data["stats"]["thesis_scope"] == "hidden"
+    assert "Thesis" not in node_types
+    assert {"Concept", "Year"} <= node_types
+    assert all(edge["type"] == "DIRECT_RELATION" for edge in data["edges"])
+    assert any(
+        {next(node["type"] for node in data["nodes"] if node["id"] == edge["source"]), next(node["type"] for node in data["nodes"] if node["id"] == edge["target"])} == {"Concept", "Year"}
+        for edge in data["edges"]
+    )
+
+
+def test_graph_map_endpoint_can_include_theses_in_metadata_focus(tmp_path, monkeypatch):
+    client, graph_service = client_for(tmp_path, monkeypatch)
+
+    response = client.get("/api/graph/map", params={"node_types": "Thesis,Concept,Year", "focus_type": "Concept"})
+
+    assert response.status_code == 200
+    data = response.json()
+    node_types = {node["type"] for node in data["nodes"]}
+    assert data["stats"]["graph_mode"] == "metadata_focus"
+    assert data["stats"]["focus_type"] == "Concept"
+    assert data["stats"]["thesis_scope"] == "included"
+    assert data["stats"]["selected_node_types"] == ["Concept", "Thesis", "Year"]
+    assert {"Thesis", "Concept", "Year"} <= node_types
+    assert any(edge["type"] == "DIRECT_RELATION" for edge in data["edges"])
+    assert any(edge["type"] == "HAS_CONCEPT" for edge in data["edges"])
+    assert any(edge["source"].startswith("thesis:") for edge in data["edges"])
+
+
 def test_rag_search_endpoint_returns_semantic_sources(tmp_path, monkeypatch):
     client, graph_service = client_for(tmp_path, monkeypatch)
 

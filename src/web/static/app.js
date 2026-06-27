@@ -25,6 +25,7 @@ const state = {
   graphMap: null,
   graphMapRaw: null,
   graphSelectedNodeTypes: [],
+  graphFocusType: "Thesis",
   graphFilters: {
     relationType: "",
     concept: "",
@@ -83,14 +84,15 @@ const GRAPH_TITLE_LABEL_THRESHOLD = 20;
 const GRAPH_ZOOM_MIN = 0.45;
 const GRAPH_ZOOM_MAX = 3;
 const GRAPH_ZOOM_STEP = 1.2;
-const GRAPH_ANALYSIS_NODE_TYPES = new Set(["Concept", "UseCase", "Methodology", "Year", "MasterLevel", "Track"]);
+const GRAPH_ANALYSIS_NODE_TYPES = new Set(["Concept", "Keyword", "UseCase", "Methodology", "Year", "MasterLevel", "Track"]);
 const GRAPH_ANALYSIS_NODE_ORDER = {
   Year: 0,
   MasterLevel: 1,
   Track: 2,
   Concept: 3,
-  UseCase: 4,
-  Methodology: 5,
+  Keyword: 4,
+  UseCase: 5,
+  Methodology: 6,
 };
 const GRAPH_ANALYSIS_LINK_LIMIT = 180;
 
@@ -212,6 +214,7 @@ function bindControls() {
   qs("#rag-next-page-button").addEventListener("click", () => loadRagSourcesPage(state.ragPage + 1));
   qs("#graph-load-button").addEventListener("click", loadGraphMap);
   qs("#graph-reload-button").addEventListener("click", loadGraphMap);
+  qs("#graph-focus-type").addEventListener("change", handleGraphFocusChange);
   qsa(".graph-category-checkbox").forEach((input) => {
     input.addEventListener("change", handleGraphCategoryChange);
   });
@@ -311,6 +314,7 @@ function renderGraphBackend(backend) {
 }
 
 async function loadGraphMap() {
+  const focusType = selectedGraphFocusType();
   const nodeTypes = selectedGraphNodeTypes();
   if (!nodeTypes.length) {
     state.graphMap = null;
@@ -320,12 +324,14 @@ async function loadGraphMap() {
     return;
   }
   setGraphBusy(true);
-  renderGraphMapStatus(`Loading graph with ${nodeTypes.map(graphTypeLabel).join(", ")}...`, "working");
+  renderGraphModeControls(focusType);
+  renderGraphMapStatus(`Loading ${graphTypeLabel(focusType)}-centered graph with ${nodeTypes.map(graphTypeLabel).join(", ")}...`, "working");
   try {
-    const params = new URLSearchParams({ node_types: nodeTypes.join(",") });
+    const params = new URLSearchParams({ node_types: nodeTypes.join(","), focus_type: focusType });
     const payload = await api.get(`/api/graph/map?${params.toString()}`);
     state.graphMapRaw = payload;
     state.graphSelectedNodeTypes = nodeTypes;
+    state.graphFocusType = focusType;
     state.selectedGraphNodeId = null;
     fillGraphFilterSelects();
     renderFilteredGraphMap();
@@ -339,10 +345,27 @@ async function loadGraphMap() {
 }
 
 function selectedGraphNodeTypes() {
-  return qsa(".graph-category-checkbox:checked").map((input) => input.value);
+  const nodeTypes = qsa(".graph-category-checkbox:checked").map((input) => input.value);
+  const focusType = selectedGraphFocusType();
+  if (!nodeTypes.includes(focusType)) {
+    nodeTypes.unshift(focusType);
+  }
+  return nodeTypes;
+}
+
+function selectedGraphFocusType() {
+  return valueOf("#graph-focus-type") || "Thesis";
+}
+
+function handleGraphFocusChange() {
+  const focusType = selectedGraphFocusType();
+  syncGraphFocusCheckbox(focusType);
+  renderGraphModeControls(focusType);
+  handleGraphCategoryChange();
 }
 
 function handleGraphCategoryChange() {
+  syncGraphFocusCheckbox();
   updateGraphCategorySummary();
   if (state.view !== "graph" || state.graphBusy) return;
   if (state.graphMapRaw) {
@@ -352,12 +375,30 @@ function handleGraphCategoryChange() {
   }
 }
 
+function syncGraphFocusCheckbox(focusType = selectedGraphFocusType()) {
+  const focusCheckbox = qsa(".graph-category-checkbox").find((input) => input.value === focusType);
+  if (focusCheckbox) focusCheckbox.checked = true;
+}
+
+function renderGraphModeControls(focusType = selectedGraphFocusType()) {
+  const metadataMode = focusType !== "Thesis";
+  const analysisToggle = qs("#graph-analysis-links");
+  const analysisPair = qs("#graph-analysis-pair");
+  analysisToggle.disabled = metadataMode || state.graphBusy;
+  analysisPair.disabled = metadataMode || state.graphBusy;
+  if (metadataMode) {
+    analysisToggle.checked = false;
+    state.graphFilters.analysisLinks = false;
+  }
+}
+
 function updateGraphCategorySummary() {
   const selected = selectedGraphNodeTypes();
+  const focusType = selectedGraphFocusType();
   const summary = qs("#graph-category-summary");
   if (!summary) return;
   summary.textContent = selected.length
-    ? `${selected.length} selected: ${selected.map(graphTypeLabel).join(", ")}`
+    ? `${graphTypeLabel(focusType)} center | ${selected.length} selected: ${selected.map(graphTypeLabel).join(", ")}`
     : "No category selected";
 }
 
@@ -379,6 +420,20 @@ function graphMapSummary(payload) {
   const stats = payload.stats || {};
   const backendLabel = payload.backend === "neo4j" ? "Neo4j" : "Graph";
   const visibleCounts = stats.visible_node_counts || {};
+  const focusLabel = graphTypeLabel(stats.focus_type || "Thesis");
+  if (stats.graph_mode === "metadata_focus") {
+    const categoryText = (stats.selected_node_types || []).length
+      ? ` | categories: ${stats.selected_node_types.map(graphTypeLabel).join(", ")}`
+      : "";
+    const filterText = stats.filters_active ? ` | ${formatNumber(stats.filters_active)} active filter${stats.filters_active === 1 ? "" : "s"}` : "";
+    const directText = stats.direct_relation_edges
+      ? ` | ${formatNumber(stats.direct_relation_edges)} direct ${stats.direct_relation_edges === 1 ? "relation" : "relations"}`
+      : "";
+    const thesisText = stats.thesis_relation_edges
+      ? ` | ${formatNumber(stats.thesis_relation_edges)} thesis ${stats.thesis_relation_edges === 1 ? "link" : "links"}`
+      : "";
+    return `${focusLabel}-centered map, ${formatNumber(stats.visible_nodes || 0)} nodes, ${formatNumber(stats.visible_edges || 0)} relations from ${formatNumber(stats.source_documents || 0)} total theses | ${backendLabel}${categoryText}${filterText}${directText}${thesisText}`;
+  }
   const thesisCount = visibleCounts.Thesis || 0;
   const categoryText = (stats.selected_node_types || []).length
     ? ` | categories: ${stats.selected_node_types.map(graphTypeLabel).join(", ")}`
@@ -400,6 +455,7 @@ function setGraphBusy(isBusy) {
   state.graphBusy = isBusy;
   qs("#graph-load-button").disabled = isBusy;
   qs("#graph-reload-button").disabled = isBusy;
+  qs("#graph-focus-type").disabled = isBusy;
   qsa(".graph-category-checkbox").forEach((input) => {
     input.disabled = isBusy;
   });
@@ -409,6 +465,7 @@ function setGraphBusy(isBusy) {
   qsa(".graph-filter-panel select, .graph-filter-panel input, #graph-clear-filters-button").forEach((element) => {
     element.disabled = isBusy;
   });
+  renderGraphModeControls();
 }
 
 function defaultGraphFilters() {
@@ -474,6 +531,9 @@ function renderFilteredGraphMap() {
 }
 
 function filterGraphMap(payload, filters, selectedNodeId) {
+  if (payload.stats?.graph_mode === "metadata_focus") {
+    return filterMetadataFocusGraphMap(payload, filters, selectedNodeId);
+  }
   const rawNodes = payload.nodes || [];
   const rawEdges = payload.edges || [];
   const nodeById = new Map(rawNodes.map((node) => [node.id, node]));
@@ -548,6 +608,65 @@ function filterGraphMap(payload, filters, selectedNodeId) {
       analysis_edges_total: analysisResult.total,
     },
   };
+}
+
+function filterMetadataFocusGraphMap(payload, filters, selectedNodeId) {
+  const rawNodes = payload.nodes || [];
+  const rawEdges = payload.edges || [];
+  const nodeById = new Map(rawNodes.map((node) => [node.id, node]));
+  let visibleEdges = rawEdges.filter((edge) => {
+    const source = nodeById.get(edge.source);
+    const target = nodeById.get(edge.target);
+    if (!source || !target) return false;
+    if (filters.relationType && source.type !== filters.relationType && target.type !== filters.relationType) return false;
+    if (filters.concept && !graphEdgeHasEndpoint(source, target, "Concept", filters.concept)) return false;
+    if (filters.useCase && !graphEdgeHasEndpoint(source, target, "UseCase", filters.useCase)) return false;
+    if (filters.year && !graphEdgeHasEndpoint(source, target, "Year", filters.year)) return false;
+    if (filters.masterLevel && !graphEdgeHasEndpoint(source, target, "MasterLevel", filters.masterLevel)) return false;
+    if (filters.track && !graphEdgeHasEndpoint(source, target, "Track", filters.track)) return false;
+    return true;
+  });
+
+  if (filters.selectedOnly && selectedNodeId && nodeById.has(selectedNodeId)) {
+    visibleEdges = visibleEdges.filter((edge) => edge.source === selectedNodeId || edge.target === selectedNodeId);
+  }
+
+  const nodeIds = new Set();
+  visibleEdges.forEach((edge) => {
+    nodeIds.add(edge.source);
+    nodeIds.add(edge.target);
+  });
+  if (filters.selectedOnly && selectedNodeId && nodeById.has(selectedNodeId)) {
+    nodeIds.add(selectedNodeId);
+  }
+  const nodes = rawNodes.filter((node) => nodeIds.has(node.id));
+  const visibleNodeCounts = nodes.reduce((counts, node) => {
+    counts[node.type] = (counts[node.type] || 0) + 1;
+    return counts;
+  }, {});
+  const directRelationCount = visibleEdges.filter((edge) => edge.type === "DIRECT_RELATION").length;
+  const thesisRelationCount = visibleEdges.length - directRelationCount;
+
+  return {
+    ...payload,
+    nodes,
+    edges: visibleEdges,
+    stats: {
+      ...(payload.stats || {}),
+      visible_nodes: nodes.length,
+      visible_edges: visibleEdges.length,
+      visible_node_counts: visibleNodeCounts,
+      filters_active: graphFilterCount(filters),
+      analysis_edges: 0,
+      analysis_edges_total: 0,
+      direct_relation_edges: directRelationCount,
+      thesis_relation_edges: thesisRelationCount,
+    },
+  };
+}
+
+function graphEdgeHasEndpoint(source, target, type, label) {
+  return (source.type === type && source.label === label) || (target.type === type && target.label === label);
 }
 
 function graphAnalysisEdges(rawEdges, nodeById, thesisIds, visibleNodeIds, analysisPair) {
@@ -669,6 +788,7 @@ function renderKnowledgeGraph(payload) {
   }));
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const visibleThesisCount = nodes.filter((node) => node.type === "Thesis").length;
+  const focusType = payload.stats?.focus_type || "Thesis";
   const edges = (payload.edges || [])
     .map((edge) => ({
       ...edge,
@@ -690,14 +810,14 @@ function renderKnowledgeGraph(payload) {
     return;
   }
 
-  placeGraphNodes(nodes, width, height);
+  placeGraphNodes(nodes, width, height, focusType);
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.innerHTML = `
     <g class="graph-viewport">
       <g class="graph-edge-layer">
         ${edges.map((edge, index) => `
           <line
-          class="graph-edge ${edge.type === "ANALYSIS_LINK" ? "analysis-edge" : ""}"
+          class="graph-edge ${edge.type === "ANALYSIS_LINK" ? "analysis-edge" : ""} ${edge.type === "DIRECT_RELATION" ? "direct-edge" : ""}"
           data-index="${index}"
           data-source="${escapeHtml(edge.source)}"
           data-target="${escapeHtml(edge.target)}"
@@ -706,7 +826,7 @@ function renderKnowledgeGraph(payload) {
       </g>
       <g class="graph-node-layer">
         ${nodes.map((node) => `
-          <g class="graph-node type-${escapeHtml(node.type.toLowerCase())} ${graphNodeShouldShowLabel(node, visibleThesisCount) ? "labelled" : ""}" data-node-id="${escapeHtml(node.id)}" tabindex="0" role="button" aria-label="${escapeHtml(`${graphTypeLabel(node.type)}: ${node.label}`)}">
+          <g class="graph-node type-${escapeHtml(node.type.toLowerCase())} ${graphNodeShouldShowLabel(node, visibleThesisCount, focusType) ? "labelled" : ""}" data-node-id="${escapeHtml(node.id)}" tabindex="0" role="button" aria-label="${escapeHtml(`${graphTypeLabel(node.type)}: ${node.label}`)}">
             <title>${escapeHtml(`${graphTypeLabel(node.type)}: ${node.label}`)}</title>
             <circle r="${node.radius}" fill="${escapeHtml(graphTypeColor(node.type))}"></circle>
             <text class="graph-node-label" y="${node.radius + 13}">${escapeHtml(graphVisibleLabel(node))}</text>
@@ -731,25 +851,16 @@ function renderKnowledgeGraph(payload) {
 
   renderGraphLegend(payload);
   renderGraphInspector(null);
-  runGraphLayout(nodes, edges, width, height);
+  runGraphLayout(nodes, edges, width, height, focusType);
 }
 
-function placeGraphNodes(nodes, width, height) {
+function placeGraphNodes(nodes, width, height, focusType = "Thesis") {
   const groups = new Map();
   nodes.forEach((node) => {
     if (!groups.has(node.type)) groups.set(node.type, []);
     groups.get(node.type).push(node);
   });
-  const anchors = {
-    Thesis: [0.5, 0.52],
-    Concept: [0.22, 0.24],
-    Keyword: [0.22, 0.76],
-    UseCase: [0.8, 0.28],
-    Methodology: [0.78, 0.76],
-    Year: [0.5, 0.13],
-    MasterLevel: [0.1, 0.52],
-    Track: [0.9, 0.52],
-  };
+  const anchors = graphAnchorFractions(focusType);
 
   groups.forEach((items, type) => {
     const [anchorX, anchorY] = anchors[type] || [0.5, 0.5];
@@ -765,19 +876,12 @@ function placeGraphNodes(nodes, width, height) {
   });
 }
 
-function runGraphLayout(nodes, edges, width, height) {
+function runGraphLayout(nodes, edges, width, height, focusType = "Thesis") {
   let tick = 0;
   const maxTicks = 150;
-  const anchors = {
-    Thesis: [width * 0.5, height * 0.52],
-    Concept: [width * 0.22, height * 0.24],
-    Keyword: [width * 0.22, height * 0.76],
-    UseCase: [width * 0.8, height * 0.28],
-    Methodology: [width * 0.78, height * 0.76],
-    Year: [width * 0.5, height * 0.13],
-    MasterLevel: [width * 0.1, height * 0.52],
-    Track: [width * 0.9, height * 0.52],
-  };
+  const anchors = Object.fromEntries(
+    Object.entries(graphAnchorFractions(focusType)).map(([type, [x, y]]) => [type, [width * x, height * y]]),
+  );
 
   function step() {
     applyGraphForces(nodes, edges, anchors, width, height);
@@ -792,6 +896,23 @@ function runGraphLayout(nodes, edges, width, height) {
 
   renderGraphPositions(nodes, edges);
   state.graphAnimationFrame = requestAnimationFrame(step);
+}
+
+function graphAnchorFractions(focusType = "Thesis") {
+  const anchors = {
+    Thesis: [0.5, 0.52],
+    Concept: [0.22, 0.24],
+    Keyword: [0.22, 0.76],
+    UseCase: [0.8, 0.28],
+    Methodology: [0.78, 0.76],
+    Year: [0.5, 0.13],
+    MasterLevel: [0.1, 0.52],
+    Track: [0.9, 0.52],
+  };
+  if (focusType && focusType !== "Thesis") {
+    anchors[focusType] = [0.5, 0.52];
+  }
+  return anchors;
 }
 
 function applyGraphForces(nodes, edges, anchors, width, height) {
@@ -1106,9 +1227,10 @@ function graphVisibleLabel(node) {
   return truncate(node.label, 28);
 }
 
-function graphNodeShouldShowLabel(node, visibleThesisCount = Infinity) {
+function graphNodeShouldShowLabel(node, visibleThesisCount = Infinity, focusType = "Thesis") {
   const incoming = Number(node.incoming_edges || node.weight || 1);
   if (node.type === "Thesis") return visibleThesisCount <= GRAPH_TITLE_LABEL_THRESHOLD;
+  if (visibleThesisCount === 0) return node.type === focusType || incoming >= 2;
   if (node.type === "Keyword") return false;
   if (node.type === "Concept") return incoming >= 12;
   return true;
@@ -1130,6 +1252,10 @@ function formatGraphEdgeSummary(edge) {
   if (edge.type === "ANALYSIS_LINK") {
     const count = Number(edge.weight || 0);
     return `shared by ${formatNumber(count)} ${count === 1 ? "thesis" : "theses"}`;
+  }
+  if (edge.type === "DIRECT_RELATION") {
+    const count = Number(edge.weight || 0);
+    return `direct relation through ${formatNumber(count)} ${count === 1 ? "thesis" : "theses"}`;
   }
   return formatGraphEdgeType(edge.type);
 }

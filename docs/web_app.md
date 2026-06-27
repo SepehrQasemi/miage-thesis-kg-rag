@@ -35,13 +35,13 @@ Shows global dataset and graph metrics from Neo4j.
 
 ### Knowledge Graph
 
-Displays a scoped graph map for the UI. The user first chooses the metadata categories to load, such as concepts, years, use cases, methods, levels, tracks, or keywords. The backend then returns all thesis nodes plus only the selected metadata categories, so the graph can use the complete thesis dataset without drawing every relationship family at once.
+Displays a scoped graph map for the UI. The user first chooses the central node type and the categories to load. With `Thesis` as the central node, the backend returns thesis nodes plus only the selected metadata categories. With a metadata type such as `Concept` as the central node, the backend returns a direct metadata graph such as Concept -> Year or Concept -> Keyword. The user can also tick `Thesis` in this mode when they want to see the thesis evidence nodes behind those direct relations.
 
 The graph view includes client-side filters for relation type, concept, use case, year, master level, track, and selected-node focus. These filters only change what is drawn in the browser; Neo4j remains the source of truth.
 
 The graph canvas also supports zoom controls, mouse-wheel zoom, reset, and pan by dragging empty canvas space.
 
-`Analysis links` are derived in the browser from visible thesis paths. If a thesis connects to `Year: 2024` and `Concept: cloud computing`, the UI can draw a weighted analysis link between those metadata nodes. This keeps Neo4j's thesis-centered model intact while making cross-metadata analysis readable.
+In thesis-centered mode, optional `Analysis links` are derived in the browser from visible thesis paths. If a thesis connects to `Year: 2024` and `Concept: cloud computing`, the UI can draw a weighted analysis link between those metadata nodes. In metadata-centered mode, the backend derives direct weighted links from the selected central metadata type to the other selected categories. The weights count how many theses connect both metadata nodes.
 
 ### Thesis Search
 
@@ -121,7 +121,13 @@ Use `node_types` as a comma-separated list when the frontend should load all the
 /api/graph/map?node_types=Concept,Year,UseCase
 ```
 
-Without `node_types`, the endpoint keeps the older capped compatibility mode. With `node_types`, the response uses `stats.thesis_scope = "all"` and `stats.thesis_limit = null`.
+Use `focus_type` to choose the central node type:
+
+```text
+/api/graph/map?node_types=Concept,Year,Keyword&focus_type=Concept
+```
+
+Without `node_types`, the endpoint keeps the older capped compatibility mode. With `node_types` and `focus_type=Thesis`, the response uses `stats.thesis_scope = "all"` and `stats.thesis_limit = null`. With a metadata `focus_type`, the response uses `stats.graph_mode = "metadata_focus"` and returns `DIRECT_RELATION` edges weighted by shared thesis count. If `Thesis` is included in `node_types`, the response also includes thesis nodes and their original thesis-to-metadata edges.
 
 ## Import Approval
 
