@@ -51,6 +51,8 @@ python scripts/run_web_app.py --port 8000
 Use `.env.example` as the template:
 
 ```text
+MIAGE_NEO4J_HTTP_PORT=7474
+MIAGE_NEO4J_BOLT_PORT=7687
 MIAGE_NEO4J_URI=bolt://127.0.0.1:7687
 MIAGE_NEO4J_USER=neo4j
 MIAGE_NEO4J_PASSWORD=<generated locally>
@@ -58,7 +60,7 @@ MIAGE_NEO4J_DATABASE=
 MIAGE_MAX_UPLOAD_MB=100
 ```
 
-Neo4j ports are published on `127.0.0.1` for local development only. Changing `.env` does not rotate credentials in an existing `neo4j_data` volume; update the database password and `.env` together, then restart the application.
+Neo4j ports are published on `127.0.0.1` for local development only. If Windows reserves a default port, choose available values for `MIAGE_NEO4J_HTTP_PORT` and `MIAGE_NEO4J_BOLT_PORT`, then update `MIAGE_NEO4J_URI` to use the selected Bolt port. Changing `.env` does not rotate credentials in an existing `neo4j_data` volume; update the database password and `.env` together, then restart the application.
 
 Neo4j Browser:
 
