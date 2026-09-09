@@ -82,7 +82,7 @@ Neo4j Browser is available at:
 http://127.0.0.1:7474
 ```
 
-Default local credentials are defined in `.env.example`.
+A fresh setup generates a unique local Neo4j password in the ignored `.env` file.
 
 ### Manual Setup
 
@@ -91,6 +91,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+python scripts/setup_project.py --prepare-env-only
 docker compose up -d neo4j
 python scripts/setup_project.py
 python scripts/doctor.py
@@ -104,7 +105,7 @@ Copy `.env.example` to `.env` if it does not already exist.
 ```text
 MIAGE_NEO4J_URI=bolt://127.0.0.1:7687
 MIAGE_NEO4J_USER=neo4j
-MIAGE_NEO4J_PASSWORD=miage-rag-2026
+MIAGE_NEO4J_PASSWORD=<generated locally>
 MIAGE_NEO4J_DATABASE=
 
 MIAGE_DATA_DIR=data
@@ -273,6 +274,8 @@ Ouvrir:
 http://127.0.0.1:8000
 ```
 
+Neo4j ports are published on `127.0.0.1` for local development only. Changing `.env` does not rotate credentials in an existing `neo4j_data` volume; update the database password and `.env` together, then restart the application.
+
 Neo4j Browser:
 
 ```text
@@ -286,6 +289,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+python scripts/setup_project.py --prepare-env-only
 docker compose up -d neo4j
 python scripts/setup_project.py
 python scripts/doctor.py

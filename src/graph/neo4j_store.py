@@ -59,10 +59,16 @@ class Neo4jSettings:
 
 def neo4j_settings_from_env() -> Neo4jSettings:
     load_env_file()
+    password = os.environ.get("MIAGE_NEO4J_PASSWORD", "").strip()
+    if not password:
+        raise RuntimeError(
+            "MIAGE_NEO4J_PASSWORD is required. Run setup_project.py --prepare-env-only "
+            "or define it in the local .env file."
+        )
     return Neo4jSettings(
         uri=os.environ.get("MIAGE_NEO4J_URI", "bolt://127.0.0.1:7687"),
         user=os.environ.get("MIAGE_NEO4J_USER", "neo4j"),
-        password=os.environ.get("MIAGE_NEO4J_PASSWORD", "miage-rag-2026"),
+        password=password,
         database=os.environ.get("MIAGE_NEO4J_DATABASE") or None,
     )
 

@@ -39,6 +39,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+python scripts/setup_project.py --prepare-env-only
 docker compose up -d neo4j
 python scripts/setup_project.py
 python scripts/doctor.py
@@ -52,10 +53,12 @@ Use `.env.example` as the template:
 ```text
 MIAGE_NEO4J_URI=bolt://127.0.0.1:7687
 MIAGE_NEO4J_USER=neo4j
-MIAGE_NEO4J_PASSWORD=miage-rag-2026
+MIAGE_NEO4J_PASSWORD=<generated locally>
 MIAGE_NEO4J_DATABASE=
 MIAGE_MAX_UPLOAD_MB=100
 ```
+
+Neo4j ports are published on `127.0.0.1` for local development only. Changing `.env` does not rotate credentials in an existing `neo4j_data` volume; update the database password and `.env` together, then restart the application.
 
 Neo4j Browser:
 

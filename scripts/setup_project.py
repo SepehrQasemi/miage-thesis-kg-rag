@@ -1,4 +1,5 @@
 import argparse
+import secrets
 import shutil
 import subprocess
 import sys
@@ -45,13 +46,25 @@ def create_directories() -> None:
     (ROOT / "output").mkdir(parents=True, exist_ok=True)
 
 
-def ensure_env_file() -> None:
+def ensure_env_file() -> bool:
     env_path = ROOT / ".env"
     example_path = ROOT / ".env.example"
     if env_path.exists() or not example_path.exists():
-        return
-    shutil.copy2(example_path, env_path)
-    print(f"Created {env_path.relative_to(ROOT)} from .env.example")
+        return False
+
+    content = example_path.read_text(encoding="utf-8")
+    generated_password = secrets.token_urlsafe(24)
+    lines = content.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("MIAGE_NEO4J_PASSWORD="):
+            lines[index] = f"MIAGE_NEO4J_PASSWORD={generated_password}"
+            break
+    else:
+        lines.append(f"MIAGE_NEO4J_PASSWORD={generated_password}")
+
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"Created {env_path.relative_to(ROOT)} with a generated local Neo4j password")
+    return True
 
 
 def initialize_neo4j(reset: bool) -> None:
@@ -109,10 +122,15 @@ def main() -> None:
     parser.add_argument("--reset-neo4j", action="store_true", help="Delete and recreate the Neo4j thesis graph.")
     parser.add_argument("--build-data", action="store_true", help="Process PDFs already present in data/raw/theses_pdf.")
     parser.add_argument("--no-ocr", action="store_true", help="Disable OCR when --build-data is used.")
+    parser.add_argument("--prepare-env-only", action="store_true", help="Create a local .env with a generated Neo4j password, then exit.")
     args = parser.parse_args()
 
-    create_directories()
     ensure_env_file()
+    if args.prepare_env_only:
+        print("Local environment file is ready.")
+        return
+
+    create_directories()
 
     if args.install_deps:
         install_dependencies()

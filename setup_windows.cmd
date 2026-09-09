@@ -20,6 +20,10 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo Preparing local environment...
+python scripts\setup_project.py --prepare-env-only
+if errorlevel 1 exit /b 1
+
 echo Starting local Neo4j database...
 docker compose up -d neo4j
 if errorlevel 1 (

@@ -1,4 +1,9 @@
-from graph.neo4j_store import Neo4jGraphQueryService, Neo4jSettings, document_from_props
+from graph.neo4j_store import (
+    Neo4jGraphQueryService,
+    Neo4jSettings,
+    document_from_props,
+    neo4j_settings_from_env,
+)
 
 
 class FakeResult:
@@ -99,3 +104,25 @@ def test_document_from_props_keeps_thesis_fields_for_rag():
     assert row["title"] == "Cancer detection"
     assert row["concepts"] == "machine learning; sante"
     assert row["status"] == "active"
+
+def test_neo4j_settings_require_explicit_password(monkeypatch):
+    monkeypatch.setattr("graph.neo4j_store.load_env_file", lambda: None)
+    monkeypatch.delenv("MIAGE_NEO4J_PASSWORD", raising=False)
+
+    try:
+        neo4j_settings_from_env()
+    except RuntimeError as exc:
+        assert "MIAGE_NEO4J_PASSWORD is required" in str(exc)
+    else:
+        raise AssertionError("missing Neo4j password must fail closed")
+
+
+def test_neo4j_settings_accept_explicit_password(monkeypatch):
+    monkeypatch.setattr("graph.neo4j_store.load_env_file", lambda: None)
+    monkeypatch.setenv("MIAGE_NEO4J_PASSWORD", "local-test-password")
+
+    settings = neo4j_settings_from_env()
+
+    assert settings.uri == "bolt://127.0.0.1:7687"
+    assert settings.user == "neo4j"
+    assert settings.password == "local-test-password"
