@@ -75,13 +75,15 @@ python scripts/run_web_app.py --port 8000
 Copy `.env.example` to `.env` or run the environment preparation command. Required connection settings are:
 
 ```env
+MIAGE_NEO4J_HTTP_PORT=7474
+MIAGE_NEO4J_BOLT_PORT=7687
 MIAGE_NEO4J_URI=bolt://127.0.0.1:7687
 MIAGE_NEO4J_USER=neo4j
 MIAGE_NEO4J_PASSWORD=
 MIAGE_NEO4J_DATABASE=
 ```
 
-See `.env.example` for data directories, upload limits, retrieval settings, and optional Ollama settings. Changing `.env` does not rotate the password inside an existing Neo4j volume; update both together.
+See `.env.example` for data directories, upload limits, retrieval settings, and optional Ollama settings. If Windows reserves either default host port, set `MIAGE_NEO4J_HTTP_PORT` and `MIAGE_NEO4J_BOLT_PORT` to available ports and keep `MIAGE_NEO4J_URI` aligned with the Bolt port. Bindings remain limited to `127.0.0.1`. Changing `.env` does not rotate the password inside an existing Neo4j volume; update both together.
 
 ## Tests and validation
 
