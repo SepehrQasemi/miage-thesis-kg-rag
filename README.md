@@ -1,95 +1,67 @@
-# MIAGE Thesis Knowledge Graph + RAG
+# MIAGE Thesis Knowledge Graph + Retrieval
 
-## English
+Local application for importing MIAGE dissertation PDFs, reviewing extracted metadata, building a Neo4j knowledge graph, and retrieving related dissertations with transparent sources.
 
-### Overview
+## Problem and scope
 
-This project is a local, free web application for managing MIAGE thesis PDFs and exploring them through a Neo4j Knowledge Graph and a local RAG layer.
+Academic dissertation collections are difficult to explore as folders of PDFs. This project turns reviewed metadata into graph relationships and offers search, graph exploration, CSV export, and local retrieval. It is designed for local research work, not public multi-user hosting.
 
-The application can:
+## Main capabilities
 
-- upload one PDF or multiple PDFs together;
-- extract structured thesis metadata from the first pages of each PDF;
-- review, approve, or discard import drafts from the web interface;
-- store thesis metadata and graph relationships directly in Neo4j;
-- export the full thesis dataset as CSV;
-- search theses with filters and pagination;
-- open thesis profiles inside the application;
-- visualize the Knowledge Graph in the browser;
-- ask RAG questions over thesis metadata with source theses, relevance scores, and pagination;
-- optionally use a local Ollama model for extraction review suggestions.
+- batch PDF upload with duplicate detection
+- metadata extraction with review, approval, and discard states
+- Neo4j nodes and relationships for dissertations and their metadata
+- filtered dissertation search and profile pages
+- interactive knowledge-graph views
+- CSV export and dataset validation
+- source-linked retrieval with relevance thresholds and pagination
+- optional local Ollama suggestions for extraction review and answer wording
 
-No paid API is required. Neo4j Community Edition and Ollama can run locally.
-
-### Architecture
-
-Neo4j is the application source of truth.
-
-- Neo4j stores thesis metadata, import drafts, graph nodes, and graph relationships.
-- The filesystem stores PDF files, staged uploads, CSV exports, graph snapshots, and reports.
-- FastAPI exposes the web application and JSON endpoints.
-- The frontend is static HTML, CSS, and JavaScript.
-- RAG uses deterministic local embeddings computed from Neo4j thesis rows at runtime.
-- Ollama is optional and only used for local LLM review suggestions.
+## Architecture
 
 ```mermaid
 flowchart LR
-    User["User"] --> UI["Web UI"]
-    UI --> API["FastAPI"]
-    API --> Neo4j["Neo4j graph database"]
-    API --> Files["PDFs, CSV exports, reports"]
-    API --> RAG["Local RAG service"]
-    RAG --> Neo4j
-    API -. optional .-> Ollama["Local Ollama model"]
+    User[Researcher] --> UI[Static web UI]
+    UI --> API[FastAPI]
+    API --> Import[PDF ingestion and extraction]
+    Import --> Review[Review drafts]
+    Review --> Graph[Neo4j graph]
+    API --> Retrieval[Deterministic retrieval]
+    Retrieval --> Graph
+    Retrieval -. optional wording .-> Ollama[Local Ollama]
+    API --> Files[PDFs, CSV exports, reports]
 ```
 
-### Main Stack
+Neo4j is the metadata source of truth. The filesystem holds imported PDFs, staging files, exports, graph snapshots, and reports. FastAPI serves JSON endpoints and the static HTML/CSS/JavaScript interface.
 
-- Python 3.11+
-- FastAPI and Uvicorn
-- Neo4j Community Edition
-- Docker Compose for local Neo4j
-- static HTML, CSS, and JavaScript
-- pypdf, PyMuPDF, and OCR fallback for PDF extraction
-- local deterministic embeddings for RAG
-- optional Ollama model: `qwen2.5:7b`
+## Retrieval behavior
 
-### Quick Start On Windows
+The default `local-hash-v1` implementation is deterministic and local. It tokenizes configured metadata fields, expands a bounded vocabulary, hashes weighted features into fixed-size vectors, and combines vector and sparse-feature similarity. These are hash-based feature vectors, not neural semantic embeddings. Results include their source dissertations and scores.
 
-1. Make sure Docker Desktop is installed and running.
+Ollama is optional. When enabled, it can suggest extraction corrections or phrase a response from retrieved sources. Retrieval, graph construction, and the rest of the application work without it.
 
-2. Install and initialize the project. This command creates the Python virtual environment, installs dependencies, starts Neo4j with Docker Compose, creates `.env` when missing, and checks the installation:
+## Stack
+
+Python 3.11+, FastAPI, Neo4j, Docker Compose, pypdf, PyMuPDF, RapidOCR fallback, pytest, and Playwright.
+
+## Quick start on Windows
+
+Requirements: Python 3.11+ and Docker Desktop.
 
 ```bat
 setup_windows.cmd
-```
-
-3. Start the web app:
-
-```bat
 run_app_windows.cmd
 ```
 
-4. Open:
+Open `http://127.0.0.1:8000`. Neo4j Browser is available at `http://127.0.0.1:7474`.
 
-```text
-http://127.0.0.1:8000
-```
+A fresh setup creates an ignored `.env` with a unique local Neo4j password before Compose starts. Neo4j ports bind to `127.0.0.1` by default.
 
-Neo4j Browser is available at:
-
-```text
-http://127.0.0.1:7474
-```
-
-A fresh setup generates a unique local Neo4j password in the ignored `.env` file.
-
-### Manual Setup
+## Manual setup
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python scripts/setup_project.py --prepare-env-only
 docker compose up -d neo4j
@@ -98,253 +70,70 @@ python scripts/doctor.py
 python scripts/run_web_app.py --port 8000
 ```
 
-### Configuration
+## Configuration
 
-Copy `.env.example` to `.env` if it does not already exist.
-
-```text
-MIAGE_NEO4J_URI=bolt://127.0.0.1:7687
-MIAGE_NEO4J_USER=neo4j
-MIAGE_NEO4J_PASSWORD=<generated locally>
-MIAGE_NEO4J_DATABASE=
-
-MIAGE_DATA_DIR=data
-MIAGE_RAW_PDF_DIR=data/raw/theses_pdf
-MIAGE_PROCESSED_DIR=data/processed
-MIAGE_REPORTS_DIR=data/reports
-MIAGE_GRAPH_DIR=data/graph
-MIAGE_CACHE_DIR=data/cache
-MIAGE_STAGING_DIR=data/staging
-MIAGE_MAX_UPLOAD_MB=100
-```
-
-### Web App Features
-
-- `Dashboard`: dataset and graph overview.
-- `Knowledge Graph`: interactive graph map that first asks which categories to load, including thesis nodes when needed. It supports a thesis-centered map and metadata-centered maps, for example Concept -> Year or Concept -> Keyword, with an optional `Thesis` category to show the evidence nodes behind direct analytical relations. It also includes filters, zoom, and readable relationship weights.
-- `Thesis Search`: text search, filters, pagination, and thesis profiles.
-- `Concepts`: concept index and connected theses.
-- `Dataset`: full dataset table with CSV copy/download.
-- `Ask / RAG`: local question answering with source theses, relevance scores, threshold filtering, and paginated source results.
-- `Import PDFs`: single or multi-PDF upload, metadata review, approval, discard, duplicate detection, and local LLM suggestions when Ollama is available.
-
-### Import Workflow
-
-1. Open `Import PDFs`.
-2. Upload one PDF or several PDFs together.
-3. The backend extracts metadata from the first pages.
-4. A draft is saved in Neo4j.
-5. Review extracted fields in the UI.
-6. Optionally request local LLM suggestions.
-7. Approve the draft.
-8. The PDF is copied into `data/raw/theses_pdf`.
-9. Thesis metadata and graph relationships are rebuilt in Neo4j.
-10. CSV, graph snapshots, and reports are regenerated.
-11. RAG immediately sees the new thesis because it reads from Neo4j rows.
-
-### Knowledge Graph Workflow
-
-1. Open `Knowledge Graph`.
-2. Choose the central node type. Use `Thesis` for the normal thesis-centered graph, or use a metadata type such as `Concept` to see direct derived relations from concepts to years, keywords, methods, use cases, levels, or tracks.
-3. Select the categories to analyze before loading the map. Tick `Thesis` when thesis nodes should be visible.
-4. Click `Load graph`.
-5. The map uses all theses from Neo4j as evidence, but only draws the selected visual mode. In metadata-centered mode, direct links are weighted by the number of theses connecting both metadata nodes; thesis nodes are drawn only when `Thesis` is selected.
-6. Use filters, zoom, and selection focus to inspect dense graph areas without loading every relationship family at once.
-
-### RAG Behavior
-
-The RAG layer does not force a fixed number of results. It ranks thesis metadata locally and only returns sources above the relevance threshold. This avoids showing unrelated theses when the topic is rare.
-
-Default behavior:
-
-- local deterministic embeddings;
-- no paid API;
-- Neo4j thesis rows as the source;
-- visible relevance scores in the UI;
-- maximum 20 sources per page in the UI;
-- pagination for larger result sets.
-
-### Useful Commands
-
-```powershell
-python scripts/doctor.py
-python scripts/export_csv.py
-python scripts/build_knowledge_graph.py
-python scripts/validate_dataset.py
-python scripts/validate_knowledge_graph.py
-python scripts/validate_embeddings.py
-python scripts/query_knowledge_graph.py summary
-python scripts/build_embeddings.py
-python -m pytest -q
-```
-
-Playwright Chromium is only required for browser UI tests:
-
-```powershell
-python -m playwright install chromium
-```
-
-### Optional Local LLM
-
-The application works without Ollama. If Ollama is installed, it can help review weak extraction drafts.
-
-```bat
-setup_ollama_windows.cmd
-```
-
-or:
-
-```powershell
-python scripts/setup_ollama.py --install --pull --model qwen2.5:7b
-```
-
-The default `.env.example` uses CPU-only Ollama generation:
+Copy `.env.example` to `.env` or run the environment preparation command. Required connection settings are:
 
 ```env
-MIAGE_OLLAMA_NUM_GPU=0
-MIAGE_OLLAMA_NUM_CTX=2048
-MIAGE_OLLAMA_TIMEOUT=300
+MIAGE_NEO4J_URI=bolt://127.0.0.1:7687
+MIAGE_NEO4J_USER=neo4j
+MIAGE_NEO4J_PASSWORD=
+MIAGE_NEO4J_DATABASE=
 ```
 
-This is slower than GPU offload, but it avoids CUDA/VRAM failures on small laptop GPUs. On a stronger GPU, set `MIAGE_OLLAMA_NUM_GPU=auto` or another Ollama-supported value.
+See `.env.example` for data directories, upload limits, retrieval settings, and optional Ollama settings. Changing `.env` does not rotate the password inside an existing Neo4j volume; update both together.
 
-### Project Structure
-
-```text
-src/web/              FastAPI app and web endpoints
-src/web/static/       HTML, CSS, and JavaScript frontend
-src/ingestion/        PDF import workflow
-src/extraction/       PDF text extraction and field extraction
-src/nlp/              keyword and concept extraction
-src/graph/            graph model and Neo4j query service
-src/rag/              local RAG retrieval service
-src/llm/              optional local LLM review helpers
-scripts/              setup, validation, export, and maintenance commands
-docs/                 technical documentation
-tests/                unit, API, RAG, Neo4j, and UI tests
-data/                 local PDFs, exports, graph snapshots, reports, staging
-```
-
-## Francais
-
-### Vue d'ensemble
-
-Ce projet est une application web locale et gratuite pour gerer des memoires MIAGE en PDF, les structurer dans un graphe Neo4j et les interroger avec une couche RAG locale.
-
-L'application permet de:
-
-- charger un PDF ou plusieurs PDFs ensemble;
-- extraire les metadonnees importantes des premieres pages;
-- relire, approuver ou rejeter les brouillons d'import;
-- stocker les memoires et les relations directement dans Neo4j;
-- exporter le jeu de donnees complet en CSV;
-- rechercher les memoires avec filtres et pagination;
-- ouvrir une fiche detaillee pour chaque memoire;
-- visualiser le graphe de connaissances dans l'interface;
-- poser des questions RAG avec sources, scores de pertinence et pagination;
-- utiliser optionnellement Ollama en local pour aider la relecture.
-
-Aucune API payante n'est necessaire.
-
-### Architecture
-
-Neo4j est la source de verite de l'application.
-
-- Neo4j stocke les metadonnees des memoires, les brouillons d'import, les noeuds et les relations du graphe.
-- Le systeme de fichiers stocke les PDFs, les imports temporaires, les exports CSV, les snapshots du graphe et les rapports.
-- FastAPI expose l'application web et les endpoints JSON.
-- Le frontend est en HTML, CSS et JavaScript statiques.
-- Le RAG calcule des embeddings locaux deterministes a partir des lignes de memoires lues dans Neo4j.
-- Ollama est optionnel et sert uniquement aux suggestions LLM locales.
-
-### Demarrage Rapide Sous Windows
-
-1. Verifier que Docker Desktop est installe et demarre.
-
-2. Installer et initialiser le projet. Cette commande cree l'environnement Python, installe les dependances, demarre Neo4j avec Docker Compose, cree `.env` si necessaire et verifie l'installation:
-
-```bat
-setup_windows.cmd
-run_app_windows.cmd
-```
-
-Ouvrir:
-
-```text
-http://127.0.0.1:8000
-```
-
-Neo4j ports are published on `127.0.0.1` for local development only. Changing `.env` does not rotate credentials in an existing `neo4j_data` volume; update the database password and `.env` together, then restart the application.
-
-Neo4j Browser:
-
-```text
-http://127.0.0.1:7474
-```
-
-### Installation Manuelle
+## Tests and validation
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python scripts/setup_project.py --prepare-env-only
-docker compose up -d neo4j
-python scripts/setup_project.py
-python scripts/doctor.py
-python scripts/run_web_app.py --port 8000
-```
-
-### Fonctionnalites
-
-- `Dashboard`: vue globale du dataset et du graphe.
-- `Knowledge Graph`: carte interactive qui demande d'abord les categories a charger, y compris les memoires si necessaire. Elle supporte une vue centree sur les memoires et des vues centrees sur les metadonnees, par exemple Concept -> Annee ou Concept -> Mot-cle, avec une categorie `Thesis` optionnelle pour afficher les noeuds de preuve.
-- `Thesis Search`: recherche, filtres, pagination et fiche memoire.
-- `Concepts`: index des concepts et memoires connectes.
-- `Dataset`: table complete et export CSV.
-- `Ask / RAG`: questions locales avec sources, scores, seuil de pertinence et pagination.
-- `Import PDFs`: chargement simple ou multiple, relecture des champs, approbation, rejet, detection des doublons et suggestions LLM locales si Ollama est disponible.
-
-### Cycle D'import
-
-1. Charger un ou plusieurs PDFs depuis `Import PDFs`.
-2. Extraire les metadonnees des premieres pages.
-3. Enregistrer un brouillon dans Neo4j.
-4. Relire et corriger les champs dans l'interface.
-5. Approuver le brouillon.
-6. Copier le PDF dans `data/raw/theses_pdf`.
-7. Reconstruire les noeuds et relations dans Neo4j.
-8. Regenerer les CSV, snapshots et rapports.
-9. Le RAG voit immediatement le nouveau memoire car il lit depuis Neo4j.
-
-### Cycle D'exploration Du Graphe
-
-1. Ouvrir `Knowledge Graph`.
-2. Choisir le type de noeud central. Utiliser `Thesis` pour la vue centree memoire, ou un type de metadonnee comme `Concept` pour visualiser des relations directes vers les annees, mots-cles, methodes, cas d'usage, niveaux ou parcours.
-3. Selectionner les categories a analyser avant de charger la carte. Cocher `Thesis` quand les noeuds memoire doivent etre visibles.
-4. Cliquer sur `Load graph`.
-5. La carte utilise tous les memoires stockes dans Neo4j comme preuve, mais ne dessine que le mode visuel choisi. En mode centre metadonnee, les liens directs sont ponderes par le nombre de memoires qui connectent les deux noeuds; les noeuds memoire ne sont affiches que si `Thesis` est selectionne.
-6. Utiliser les filtres, le zoom et le focus de selection pour explorer les zones denses sans charger toutes les familles de relations en meme temps.
-
-### Commandes Utiles
-
-```powershell
-python scripts/doctor.py
-python scripts/export_csv.py
-python scripts/build_knowledge_graph.py
+python -m pytest -q
 python scripts/validate_dataset.py
 python scripts/validate_knowledge_graph.py
 python scripts/validate_embeddings.py
-python scripts/query_knowledge_graph.py summary
-python -m pytest -q
 ```
 
-### Documentation
+The CI workflow installs `requirements.txt` and runs the pytest suite. Browser tests require Playwright Chromium. Integration commands that connect to Neo4j require Docker to be running.
 
-- `docs/quickstart.md`
-- `docs/user_guide.md`
-- `docs/web_app.md`
-- `docs/knowledge_graph_schema.md`
-- `docs/knowledge_graph_queries.md`
-- `docs/rag.md`
+## Reproducibility and evaluation
+
+The test suite covers extraction, import workflow, graph construction, retrieval ranking, API routes, and UI behavior. Dataset and retrieval validators provide reproducible checks against local input data. No accuracy figure is claimed because the repository does not ship a fixed, labeled evaluation corpus.
+
+Dependencies remain expressed as compatible ranges in `requirements.txt`. An exact lockfile was not generated from the current machine because its existing virtual environment points to a removed Python installation; committing a freeze from an unrelated environment would reduce reproducibility.
+
+## Sample data and privacy
+
+Use synthetic or authorized PDFs for demonstrations. Imported dissertations and generated exports under `data/` are local working data and should be reviewed before publication.
+
+## Limitations
+
+- intended for trusted local, single-user operation
+- Neo4j and uploaded files are not hardened for public hosting
+- OCR and metadata extraction require human review
+- hash-based retrieval captures configured lexical features and expansions; it is not a neural semantic model
+- optional Ollama quality and latency depend on the locally installed model and hardware
+- no hosted demo is currently verified
+
+## Project structure
+
+- `src/web/`: FastAPI routes and static frontend
+- `src/ingestion/`: upload and import workflow
+- `src/extraction/`: PDF text and metadata extraction
+- `src/nlp/`: keyword and concept extraction
+- `src/graph/`: graph model and Neo4j access
+- `src/rag/`: deterministic retrieval and optional answer generation
+- `scripts/`: setup, export, validation, and maintenance commands
+- `docs/`: user and technical guides
+- `tests/`: automated regression coverage
+
+## Documentation
+
+- [Quick start](docs/quickstart.md)
+- [User guide](docs/user_guide.md)
+- [Web application](docs/web_app.md)
+- [Knowledge graph schema](docs/knowledge_graph_schema.md)
+- [Knowledge graph queries](docs/knowledge_graph_queries.md)
+- [Retrieval details](docs/rag.md)
+
+## Status and licensing
+
+Active academic portfolio project. No open-source license has been granted yet; the source is publicly visible for review, but reuse rights are reserved until a license is selected.
